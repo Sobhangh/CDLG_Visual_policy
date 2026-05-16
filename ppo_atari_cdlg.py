@@ -624,7 +624,7 @@ if __name__ == "__main__":
                     if ended:
                         r = float(ep["r"][i])
                         l = int(ep["l"][i])
-                        print(f"global_step={global_step}, episodic_return={r}")
+                        #print(f"global_step={global_step}, episodic_return={r}")
                         writer.add_scalar("charts/episodic_return", r, global_step)
                         writer.add_scalar("charts/episodic_length", l, global_step)
             elif "final_info" in infos:
@@ -632,7 +632,7 @@ if __name__ == "__main__":
                     if info and "episode" in info:
                         r = float(info["episode"]["r"])
                         l = int(info["episode"]["l"])
-                        print(f"global_step={global_step}, episodic_return={r}")
+                        #print(f"global_step={global_step}, episodic_return={r}")
                         writer.add_scalar("charts/episodic_return", r, global_step)
                         writer.add_scalar("charts/episodic_length", l, global_step)
 
