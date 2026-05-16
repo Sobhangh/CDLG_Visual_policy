@@ -161,7 +161,7 @@ def evaluate(
     writer=None,
     global_step=0,
 ):
-    envs = gym.vector.SyncVectorEnv([make_env_fn(env_id, 0, capture_video, run_name, 0.99)])
+    envs = gym.vector.SyncVectorEnv([make_env_fn(env_id, 0, capture_video, run_name)])
     agent.eval()
 
     obs_raw, _ = envs.reset()
