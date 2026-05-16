@@ -174,6 +174,7 @@ def evaluate(
         next_obs_raw, _, _, _, infos = envs.step(actions.cpu().numpy())
         if "final_info" in infos:
             for info in infos["final_info"]:
+                print(info)
                 if "episode" not in info:
                     continue
                 episodic_returns.append(info["episode"]["r"])
