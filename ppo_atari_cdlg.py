@@ -172,14 +172,18 @@ def evaluate(
         with torch.no_grad():
             actions, _, _, _ = agent.get_action_and_value(torch.as_tensor(obs, dtype=torch.float32, device=device))
         next_obs_raw, _, _, _, infos = envs.step(actions.cpu().numpy())
-        print(infos)
-        if "final_info" in infos:
+        if "episode" in infos:
+            ep_mask = infos.get("_episode", np.ones(len(infos["episode"]["r"]), dtype=bool))
+            ep = infos["episode"]
+            for i, ended in enumerate(ep_mask):
+                if ended:
+                    episodic_returns.append(float(ep["r"][i]))
+                    episodic_lengths.append(int(ep["l"][i]))
+        elif "final_info" in infos:
             for info in infos["final_info"]:
-                #print(info)
-                if "episode" not in info:
-                    continue
-                episodic_returns.append(info["episode"]["r"])
-                episodic_lengths.append(info["episode"]["l"])
+                if info and "episode" in info:
+                    episodic_returns.append(float(info["episode"]["r"]))
+                    episodic_lengths.append(int(info["episode"]["l"]))
         obs = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
 
     ret_mean = float(np.mean(episodic_returns))
@@ -190,7 +194,7 @@ def evaluate(
         writer.add_scalar("eval/episodic_return_std", ret_std, global_step or 0)
         writer.add_scalar("eval/episodic_length_mean", len_mean, global_step or 0)
     agent.train()
-    return episodic_returns
+    return episodic_returns, episodic_lengths
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -613,12 +617,24 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
-            if "final_info" in infos:
+            if "episode" in infos:
+                ep_mask = infos.get("_episode", np.logical_or(terminations, truncations))
+                ep = infos["episode"]
+                for i, ended in enumerate(ep_mask):
+                    if ended:
+                        r = float(ep["r"][i])
+                        l = int(ep["l"][i])
+                        print(f"global_step={global_step}, episodic_return={r}")
+                        writer.add_scalar("charts/episodic_return", r, global_step)
+                        writer.add_scalar("charts/episodic_length", l, global_step)
+            elif "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-                        writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                        writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                        r = float(info["episode"]["r"])
+                        l = int(info["episode"]["l"])
+                        print(f"global_step={global_step}, episodic_return={r}")
+                        writer.add_scalar("charts/episodic_return", r, global_step)
+                        writer.add_scalar("charts/episodic_length", l, global_step)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -714,7 +730,7 @@ if __name__ == "__main__":
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
         if iteration % 20 == 0:
-            eval_returns = evaluate(
+            eval_returns, eval_lengths = evaluate(
                 agent,
                 make_env_fn=make_env,
                 env_id=args.env_id,
@@ -722,7 +738,9 @@ if __name__ == "__main__":
                 writer=writer,
                 device=device,
             )
-            print(f"Evaluation over 10 episodes: {eval_returns}")
+            rt_mean = float(np.mean(eval_returns))
+            ret_std = float(np.std(eval_returns))
+            print(f"mean return={rt_mean:.2f} +/- {ret_std:.2f}; mean length={np.mean(eval_lengths):.2f}")
             
 
     # Save final checkpoint and keep threshold initialization tensor for reproducibility.
