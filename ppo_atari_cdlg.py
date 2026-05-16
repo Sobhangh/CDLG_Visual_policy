@@ -172,9 +172,10 @@ def evaluate(
         with torch.no_grad():
             actions, _, _, _ = agent.get_action_and_value(torch.as_tensor(obs, dtype=torch.float32, device=device))
         next_obs_raw, _, _, _, infos = envs.step(actions.cpu().numpy())
+        print(infos)
         if "final_info" in infos:
             for info in infos["final_info"]:
-                print(info)
+                #print(info)
                 if "episode" not in info:
                     continue
                 episodic_returns.append(info["episode"]["r"])
