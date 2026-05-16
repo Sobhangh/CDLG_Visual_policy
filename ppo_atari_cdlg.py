@@ -103,17 +103,19 @@ class Args:
     """the target KL divergence threshold"""
 
     # CDLGNN specific arguments
+    logic_lut_rank: int = 4
+    """rank of the lookup table for CDLGNN"""
     logic_num_bits: int = 2
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 16
+    logic_k_num: int = 128
     """base kernel width multiplier for CDLGNN"""
     logic_tau: float = 8.0
     """temperature scaling value for logic features (reported for reproducibility)"""
     logic_sampling_temperature: float = 0.1
     """soft binarization temperature during training"""
-    logic_actor_group_size: int = 32
+    logic_actor_group_size: int = 512
     """number of logic neurons per action class; actor LogicDense outputs n_actions * this,
     then GroupSum sums each group into one logit per action"""
     logic_shared_network: bool = True
@@ -404,6 +406,7 @@ class CDLGAgentShared(nn.Module):
                 receptive_field_size=8,
                 stride=4,
                 padding=0,
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique"},
                 parametrization="warp",
             ),
@@ -411,30 +414,33 @@ class CDLGAgentShared(nn.Module):
             LogicConv2d(
                 in_dim=10,
                 channels=k,
-                num_kernels=2 * k,
+                num_kernels=4 * k,
                 tree_depth=args.logic_tree_depth,
                 receptive_field_size=4,
                 stride=2,
                 padding=0,
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
                 parametrization="warp",
             ),
             LogicConv2d(
                 in_dim=4,
-                channels=2 * k,
-                num_kernels=4 * k,
+                channels=4 * k,
+                num_kernels=16 * k,
                 tree_depth=args.logic_tree_depth,
                 receptive_field_size=3,
                 stride=1,
                 padding=0,
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
                 parametrization="warp",
             ),
             nn.Flatten(),
             LogicDense(
-                in_dim=4 * k * 2 * 2,
-                out_dim=actor_out_dim,
+                in_dim=16 * k * 2 * 2,
+                out_dim=actor_out_dim * 2,
                 parametrization="warp",
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique"},
             ),
         )
@@ -442,14 +448,15 @@ class CDLGAgentShared(nn.Module):
         # GroupSum: sums each group of logic_actor_group_size neurons into one action logit.
         self.actor = nn.Sequential(
             LogicDense(
-                in_dim=actor_out_dim,
+                in_dim=actor_out_dim * 2,
                 out_dim=actor_out_dim,
                 parametrization="warp",
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique"},
             ),
             GroupSum(k=n_actions, tau=args.logic_tau))
         # Critic takes the full backbone representation to predict state value.
-        self.critic = layer_init(nn.Linear(actor_out_dim, 1))
+        self.critic = layer_init(nn.Linear(actor_out_dim * 2, 1))
 
     def _features(self, x: torch.Tensor) -> torch.Tensor:
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
