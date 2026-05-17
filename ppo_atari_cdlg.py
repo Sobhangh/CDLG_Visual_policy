@@ -109,7 +109,7 @@ class Args:
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 512
+    logic_k_num: int = 256
     """base kernel width multiplier for CDLGNN"""
     logic_tau: float = 200.0
     """temperature scaling value for logic features (reported for reproducibility)"""
@@ -293,11 +293,11 @@ def build_logic_actor_backbone(
             in_dim=h,
             channels=c0,
             num_kernels=k,
-            tree_depth=2,
+            tree_depth=5,
             receptive_field_size=6,
             stride=3,
             padding=0,
-            lut_rank=6,
+            lut_rank=lut_rank,
             connections_kwargs={"init_method": "random-unique"},
             parametrization=parametrization,
         ),
@@ -597,9 +597,9 @@ if __name__ == "__main__":
     global_step = 0
     start_time = time.time()
     next_obs_raw, _ = envs.reset(seed=args.seed)
-    saved_png = save_one_grayscale_png(next_obs_raw, run_name=run_name)
-    if saved_png is not None:
-        print(f"Saved grayscale frame to {saved_png}")
+    #saved_png = save_one_grayscale_png(next_obs_raw, run_name=run_name)
+    #if saved_png is not None:
+    #    print(f"Saved grayscale frame to {saved_png}")
     next_obs = torch.Tensor(next_obs_raw).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     thresholds = None
