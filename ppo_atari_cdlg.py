@@ -103,22 +103,22 @@ class Args:
     """the target KL divergence threshold"""
 
     # CDLGNN specific arguments
-    logic_lut_rank: int = 4
+    logic_lut_rank: int = 2
     """rank of the lookup table for CDLGNN"""
     logic_num_bits: int = 2
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 128
+    logic_k_num: int = 512
     """base kernel width multiplier for CDLGNN"""
-    logic_tau: float = 8.0
+    logic_tau: float = 200.0
     """temperature scaling value for logic features (reported for reproducibility)"""
     logic_sampling_temperature: float = 0.1
     """soft binarization temperature during training"""
-    logic_actor_group_size: int = 512
+    logic_actor_group_size: int = 2048
     """number of logic neurons per action class; actor LogicDense outputs n_actions * this,
     then GroupSum sums each group into one logit per action"""
-    logic_shared_network: bool = True
+    logic_shared_network: bool = False
     """if True, the CDLGNN backbone is shared between actor and critic (like the original CNN Agent);
     if False (default), actor uses CDLGNN and critic uses a separate standard CNN"""
 
@@ -288,37 +288,48 @@ class CDLGAagent(nn.Module):
                 receptive_field_size=8,
                 stride=4,
                 padding=0,
+                lut_rank=args.logic_lut_rank + 2,
                 connections_kwargs={"init_method": "random-unique"},
-                parametrization="raw",
+                parametrization="warp",
             ),
             OrPooling2d(kernel_size=2, stride=2, padding=0),
             LogicConv2d(
                 in_dim=10,
                 channels=k,
-                num_kernels=2 * k,
+                num_kernels=4 * k,
                 tree_depth=args.logic_tree_depth,
                 receptive_field_size=4,
                 stride=2,
                 padding=0,
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="raw",
+                parametrization="warp",
             ),
             LogicConv2d(
                 in_dim=4,
-                channels=2 * k,
-                num_kernels=4 * k,
+                channels=4 * k,
+                num_kernels=16 * k,
                 tree_depth=args.logic_tree_depth,
                 receptive_field_size=3,
                 stride=1,
                 padding=0,
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="raw",
+                parametrization="warp",
             ),
             nn.Flatten(),
             LogicDense(
-                in_dim=4 * k * 2 * 2,
-                out_dim=actor_out_dim,
-                parametrization="raw",
+                in_dim=16 * k * 2 * 2,
+                out_dim=actor_out_dim * 2,
+                parametrization="warp",
+                lut_rank=args.logic_lut_rank,
+                connections_kwargs={"init_method": "random-unique"},
+            ),
+            LogicDense(
+                in_dim=actor_out_dim * 2,
+                out_dim=actor_out_dim * 2,
+                parametrization="warp",
+                lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique"},
             ),
         )
@@ -337,17 +348,26 @@ class CDLGAagent(nn.Module):
         )
 
         # GroupSum: sums each group of logic_actor_group_size neurons into one action logit.
-        self.actor = GroupSum(k=n_actions, tau=args.logic_tau)
+        self.actor = nn.Sequential(
+            LogicDense(
+                in_dim=actor_out_dim * 2,
+                out_dim=actor_out_dim,
+                parametrization="warp",
+                lut_rank=args.logic_lut_rank,
+                connections_kwargs={"init_method": "random-unique"},
+            ),
+            GroupSum(k=n_actions, tau=args.logic_tau),
+        )
         self.critic = nn.Linear(512, 1)
 
     def _actor_features(self, x: torch.Tensor) -> torch.Tensor:
-        x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
-        x = self.binarization(x)
+        #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
+        x = self.binarization(x/255.0)
         return self.actor_logic_backbone(x)
 
     def _critic_features(self, x: torch.Tensor) -> torch.Tensor:
-        x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
-        return self.critic_network(x)
+        #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
+        return self.critic_network(x/255.0)
 
     def get_value(self, x):
         return self.critic(self._critic_features(x))
@@ -402,11 +422,11 @@ class CDLGAgentShared(nn.Module):
                 in_dim=h,
                 channels=c0,
                 num_kernels=k,
-                tree_depth=args.logic_tree_depth,
+                tree_depth=args.logic_tree_depth,  # +2 to increase capacity for shared backbone
                 receptive_field_size=8,
                 stride=4,
                 padding=0,
-                lut_rank=args.logic_lut_rank,
+                lut_rank=args.logic_lut_rank + 2,  # +2 to increase capacity for shared backbone
                 connections_kwargs={"init_method": "random-unique"},
                 parametrization="warp",
             ),
@@ -438,6 +458,13 @@ class CDLGAgentShared(nn.Module):
             nn.Flatten(),
             LogicDense(
                 in_dim=16 * k * 2 * 2,
+                out_dim=actor_out_dim * 2,
+                parametrization="warp",
+                lut_rank=args.logic_lut_rank,
+                connections_kwargs={"init_method": "random-unique"},
+            ),
+            LogicDense(
+                in_dim=actor_out_dim * 2,
                 out_dim=actor_out_dim * 2,
                 parametrization="warp",
                 lut_rank=args.logic_lut_rank,
@@ -482,7 +509,7 @@ def get_distributive_channel_thresholds(calibration_obs: torch.Tensor, num_bits:
     return Binarization.get_initial_thresholds(
         calibration_obs,
         num_bits=num_bits,
-        one_per="channel",
+        one_per="global",  #"channel",
         method="distributive",
     )
 
