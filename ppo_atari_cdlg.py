@@ -109,7 +109,7 @@ class Args:
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 512
+    logic_k_num: int = 256
     """base kernel width multiplier for CDLGNN"""
     logic_tau: float = 200.0
     """temperature scaling value for logic features (reported for reproducibility)"""
