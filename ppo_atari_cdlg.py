@@ -346,13 +346,13 @@ def build_logic_actor_backbone(
             lut_rank=lut_rank,
             connections_kwargs={"init_method": "random-unique"},
         ),
-        LogicDense(
-            in_dim=actor_out_dim * 2,
-            out_dim=actor_out_dim * 2,
-            parametrization=parametrization,
-            lut_rank=lut_rank,
-            connections_kwargs={"init_method": "random-unique"},
-        ),
+        # LogicDense(
+        #     in_dim=actor_out_dim * 2,
+        #     out_dim=actor_out_dim * 2,
+        #     parametrization=parametrization,
+        #     lut_rank=lut_rank,
+        #     connections_kwargs={"init_method": "random-unique"},
+        # ),
     )
     return backbone, actor_out_dim * 2
 
