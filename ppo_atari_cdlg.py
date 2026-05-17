@@ -63,7 +63,7 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "BreakoutNoFrameskip-v4"
+    env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
     total_timesteps: int = 1_000_000 #10000000
     """total timesteps of the experiments"""
@@ -109,13 +109,13 @@ class Args:
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 256
+    logic_k_num: int = 128
     """base kernel width multiplier for CDLGNN"""
-    logic_tau: float = 200.0
+    logic_tau: float = 40.0
     """temperature scaling value for logic features (reported for reproducibility)"""
     logic_sampling_temperature: float = 0.1
     """soft binarization temperature during training"""
-    logic_actor_group_size: int = 2048
+    logic_actor_group_size: int = 1024
     """number of logic neurons per action class; actor LogicDense outputs n_actions * this,
     then GroupSum sums each group into one logit per action"""
     logic_shared_network: bool = False
