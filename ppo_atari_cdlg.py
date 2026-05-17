@@ -244,6 +244,35 @@ def ensure_nchw(x: torch.Tensor, expected_channels: int = 4) -> torch.Tensor:
     return x
 
 
+def save_one_grayscale_png(obs_batch: np.ndarray, run_name: str, env_index: int = 0) -> str | None:
+    """Save one grayscale frame from a stacked Atari observation as PNG."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    sample = np.asarray(obs_batch[env_index])
+    if sample.ndim == 3:
+        # Stacked grayscale can arrive either as HWC (84,84,4) or CHW (4,84,84).
+        if sample.shape[-1] == 4:
+            frame = sample[..., -1]
+        elif sample.shape[0] == 4:
+            frame = sample[-1, ...]
+        else:
+            frame = sample[..., 0]
+    elif sample.ndim == 2:
+        frame = sample
+    else:
+        return None
+
+    frame_uint8 = np.asarray(frame).clip(0, 255).astype(np.uint8)
+    out_dir = os.path.join("runs", run_name)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "sample_grayscale.png")
+    Image.fromarray(frame_uint8, mode="L").save(out_path)
+    return out_path
+
+
 def build_logic_actor_backbone(
     *,
     h: int,
@@ -567,11 +596,15 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
-    next_obs, _ = envs.reset(seed=args.seed)
-    next_obs = torch.Tensor(next_obs).to(device)
+    next_obs_raw, _ = envs.reset(seed=args.seed)
+    saved_png = save_one_grayscale_png(next_obs_raw, run_name=run_name)
+    if saved_png is not None:
+        print(f"Saved grayscale frame to {saved_png}")
+    next_obs = torch.Tensor(next_obs_raw).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     thresholds = None
 
+    
     if args.agent_arch.lower() == "cdlgnn":
         calibration_obs = ensure_nchw(next_obs, expected_channels=4).float() / 255.0
         thresholds = get_distributive_channel_thresholds(
