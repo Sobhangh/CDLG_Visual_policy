@@ -244,6 +244,90 @@ def ensure_nchw(x: torch.Tensor, expected_channels: int = 4) -> torch.Tensor:
     return x
 
 
+def build_logic_actor_backbone(
+    *,
+    h: int,
+    k: int,
+    c0: int,
+    actor_out_dim: int,
+    tree_depth: int,
+    lut_rank: int,
+    parametrization: str = "warp",
+) -> tuple[nn.Sequential, int]:
+    """Build the shared logic actor backbone used by both CDLG agent variants.
+
+    Spatial transitions for 84x84 input:
+    84x84 -> conv(6,s3)=27x27 -> pool(2,s2)=13x13 -> conv(3,s2)=6x6 -> conv(3,s1)=4x4 -> conv(3,s1)=2x2
+    """
+    backbone = nn.Sequential(
+        LogicConv2d(
+            in_dim=h,
+            channels=c0,
+            num_kernels=k,
+            tree_depth=2,
+            receptive_field_size=6,
+            stride=3,
+            padding=0,
+            lut_rank=6,
+            connections_kwargs={"init_method": "random-unique"},
+            parametrization=parametrization,
+        ),
+        OrPooling2d(kernel_size=2, stride=2, padding=0),
+        LogicConv2d(
+            in_dim=13,
+            channels=k,
+            num_kernels=2 * k,
+            tree_depth=tree_depth,
+            receptive_field_size=3,
+            stride=2,
+            padding=0,
+            lut_rank=lut_rank,
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            parametrization=parametrization,
+        ),
+        LogicConv2d(
+            in_dim=6,
+            channels=2 * k,
+            num_kernels=4 * k,
+            tree_depth=tree_depth,
+            receptive_field_size=3,
+            stride=1,
+            padding=0,
+            lut_rank=lut_rank,
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            parametrization=parametrization,
+        ),
+        LogicConv2d(
+            in_dim=4,
+            channels=4 * k,
+            num_kernels=8 * k,
+            tree_depth=tree_depth,
+            receptive_field_size=3,
+            stride=1,
+            padding=0,
+            lut_rank=lut_rank,
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            parametrization=parametrization,
+        ),
+        nn.Flatten(),
+        LogicDense(
+            in_dim=8 * k * 2 * 2,
+            out_dim=actor_out_dim * 2,
+            parametrization=parametrization,
+            lut_rank=lut_rank,
+            connections_kwargs={"init_method": "random-unique"},
+        ),
+        LogicDense(
+            in_dim=actor_out_dim * 2,
+            out_dim=actor_out_dim * 2,
+            parametrization=parametrization,
+            lut_rank=lut_rank,
+            connections_kwargs={"init_method": "random-unique"},
+        ),
+    )
+    return backbone, actor_out_dim * 2
+
+
 class CDLGAagent(nn.Module):
     """PPO agent where only the actor uses a TorchLogix CDLGNN backbone."""
 
@@ -277,61 +361,14 @@ class CDLGAagent(nn.Module):
         n_actions = envs.single_action_space.n
         actor_out_dim = n_actions * args.logic_actor_group_size
 
-        # Spatial transitions for 84x84 input:
-        # 84x84 -> conv(8,s4)=20x20 -> pool(2,s2)=10x10 -> conv(4,s2)=4x4 -> conv(3,s1)=2x2
-        self.actor_logic_backbone = nn.Sequential(
-            LogicConv2d(
-                in_dim=h,
-                channels=c0,
-                num_kernels=k,
-                tree_depth=args.logic_tree_depth,
-                receptive_field_size=8,
-                stride=4,
-                padding=0,
-                lut_rank=args.logic_lut_rank + 2,
-                connections_kwargs={"init_method": "random-unique"},
-                parametrization="warp",
-            ),
-            OrPooling2d(kernel_size=2, stride=2, padding=0),
-            LogicConv2d(
-                in_dim=10,
-                channels=k,
-                num_kernels=4 * k,
-                tree_depth=args.logic_tree_depth,
-                receptive_field_size=4,
-                stride=2,
-                padding=0,
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="warp",
-            ),
-            LogicConv2d(
-                in_dim=4,
-                channels=4 * k,
-                num_kernels=16 * k,
-                tree_depth=args.logic_tree_depth,
-                receptive_field_size=3,
-                stride=1,
-                padding=0,
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="warp",
-            ),
-            nn.Flatten(),
-            LogicDense(
-                in_dim=16 * k * 2 * 2,
-                out_dim=actor_out_dim * 2,
-                parametrization="warp",
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique"},
-            ),
-            LogicDense(
-                in_dim=actor_out_dim * 2,
-                out_dim=actor_out_dim * 2,
-                parametrization="warp",
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique"},
-            ),
+        self.actor_logic_backbone, actor_backbone_out_dim = build_logic_actor_backbone(
+            h=h,
+            k=k,
+            c0=c0,
+            actor_out_dim=actor_out_dim,
+            tree_depth=args.logic_tree_depth,
+            lut_rank=args.logic_lut_rank,
+            parametrization="warp",
         )
 
         # Keep a standard CNN critic path for PPO value estimation.
@@ -350,7 +387,7 @@ class CDLGAagent(nn.Module):
         # GroupSum: sums each group of logic_actor_group_size neurons into one action logit.
         self.actor = nn.Sequential(
             LogicDense(
-                in_dim=actor_out_dim * 2,
+                in_dim=actor_backbone_out_dim,
                 out_dim=actor_out_dim,
                 parametrization="warp",
                 lut_rank=args.logic_lut_rank,
@@ -414,68 +451,20 @@ class CDLGAgentShared(nn.Module):
         n_actions = envs.single_action_space.n
         actor_out_dim = n_actions * args.logic_actor_group_size
 
-        # Shared CDLGNN backbone used by both actor and critic.
-        # Spatial transitions for 84x84 input:
-        # 84x84 -> conv(8,s4)=20x20 -> pool(2,s2)=10x10 -> conv(4,s2)=4x4 -> conv(3,s1)=2x2
-        self.backbone = nn.Sequential(
-            LogicConv2d(
-                in_dim=h,
-                channels=c0,
-                num_kernels=k,
-                tree_depth=args.logic_tree_depth,  # +2 to increase capacity for shared backbone
-                receptive_field_size=8,
-                stride=4,
-                padding=0,
-                lut_rank=args.logic_lut_rank + 2,  # +2 to increase capacity for shared backbone
-                connections_kwargs={"init_method": "random-unique"},
-                parametrization="warp",
-            ),
-            OrPooling2d(kernel_size=2, stride=2, padding=0),
-            LogicConv2d(
-                in_dim=10,
-                channels=k,
-                num_kernels=4 * k,
-                tree_depth=args.logic_tree_depth,
-                receptive_field_size=4,
-                stride=2,
-                padding=0,
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="warp",
-            ),
-            LogicConv2d(
-                in_dim=4,
-                channels=4 * k,
-                num_kernels=16 * k,
-                tree_depth=args.logic_tree_depth,
-                receptive_field_size=3,
-                stride=1,
-                padding=0,
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
-                parametrization="warp",
-            ),
-            nn.Flatten(),
-            LogicDense(
-                in_dim=16 * k * 2 * 2,
-                out_dim=actor_out_dim * 2,
-                parametrization="warp",
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique"},
-            ),
-            LogicDense(
-                in_dim=actor_out_dim * 2,
-                out_dim=actor_out_dim * 2,
-                parametrization="warp",
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique"},
-            ),
+        self.backbone, actor_backbone_out_dim = build_logic_actor_backbone(
+            h=h,
+            k=k,
+            c0=c0,
+            actor_out_dim=actor_out_dim,
+            tree_depth=args.logic_tree_depth,
+            lut_rank=args.logic_lut_rank,
+            parametrization="warp",
         )
         
         # GroupSum: sums each group of logic_actor_group_size neurons into one action logit.
         self.actor = nn.Sequential(
             LogicDense(
-                in_dim=actor_out_dim * 2,
+                in_dim=actor_backbone_out_dim,
                 out_dim=actor_out_dim,
                 parametrization="warp",
                 lut_rank=args.logic_lut_rank,
@@ -483,7 +472,7 @@ class CDLGAgentShared(nn.Module):
             ),
             GroupSum(k=n_actions, tau=args.logic_tau))
         # Critic takes the full backbone representation to predict state value.
-        self.critic = layer_init(nn.Linear(actor_out_dim * 2, 1))
+        self.critic = layer_init(nn.Linear(actor_backbone_out_dim, 1))
 
     def _features(self, x: torch.Tensor) -> torch.Tensor:
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
