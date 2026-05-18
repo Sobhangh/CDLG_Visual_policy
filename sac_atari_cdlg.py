@@ -64,7 +64,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
-    total_timesteps: int = 500_000
+    total_timesteps: int = 1_000_000
     """total timesteps of the experiments"""
     buffer_size: int = int(2e6)
     """the replay memory buffer size"""  #10e6 smaller than in original paper but evaluation is done only for 100k steps anyway
@@ -206,6 +206,49 @@ def get_distributive_channel_thresholds(calibration_obs: torch.Tensor, num_bits:
         one_per="global",
         method="distributive",
     )
+
+
+def save_checkpoint(
+    *,
+    checkpoint_path: str,
+    actor: nn.Module,
+    qf1: nn.Module,
+    qf2: nn.Module,
+    qf1_target: nn.Module,
+    qf2_target: nn.Module,
+    q_optimizer: optim.Optimizer,
+    actor_optimizer: optim.Optimizer,
+    args: Args,
+    autotune: bool,
+    alpha: float,
+    thresholds: torch.Tensor | None = None,
+    log_alpha: torch.Tensor | None = None,
+    a_optimizer: optim.Optimizer | None = None,
+):
+    checkpoint = {
+        "actor_state_dict": actor.state_dict(),
+        "qf1_state_dict": qf1.state_dict(),
+        "qf2_state_dict": qf2.state_dict(),
+        "qf1_target_state_dict": qf1_target.state_dict(),
+        "qf2_target_state_dict": qf2_target.state_dict(),
+        "q_optimizer_state_dict": q_optimizer.state_dict(),
+        "actor_optimizer_state_dict": actor_optimizer.state_dict(),
+        "args": vars(args),
+    }
+
+    if autotune:
+        checkpoint["log_alpha_state_dict"] = log_alpha.detach().cpu()
+        checkpoint["a_optimizer_state_dict"] = a_optimizer.state_dict()
+        checkpoint["alpha"] = alpha
+
+    if args.agent_arch.lower() == "cdlgnn":
+        threshold_tensor = thresholds
+        if threshold_tensor is None and hasattr(actor, "binarization") and hasattr(actor.binarization, "thresholds"):
+            threshold_tensor = actor.binarization.thresholds
+        if threshold_tensor is not None:
+            checkpoint["thresholds"] = threshold_tensor.detach().cpu()
+
+    torch.save(checkpoint, checkpoint_path)
 
 
 def build_logic_backbone(
@@ -671,31 +714,42 @@ if __name__ == "__main__":
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
 
+            if global_step % 250000 == 0:
+                os.makedirs(f"runs/{run_name}", exist_ok=True)
+                save_checkpoint(
+                    checkpoint_path=f"runs/{run_name}/checkpoint_{global_step}.pt",
+                    actor=actor,
+                    qf1=qf1,
+                    qf2=qf2,
+                    qf1_target=qf1_target,
+                    qf2_target=qf2_target,
+                    q_optimizer=q_optimizer,
+                    actor_optimizer=actor_optimizer,
+                    args=args,
+                    autotune=args.autotune,
+                    alpha=alpha,
+                    thresholds=thresholds,
+                    log_alpha=log_alpha if args.autotune else None,
+                    a_optimizer=a_optimizer if args.autotune else None,
+                )
+
     os.makedirs(f"runs/{run_name}", exist_ok=True)
-    checkpoint = {
-        "actor_state_dict": actor.state_dict(),
-        "qf1_state_dict": qf1.state_dict(),
-        "qf2_state_dict": qf2.state_dict(),
-        "qf1_target_state_dict": qf1_target.state_dict(),
-        "qf2_target_state_dict": qf2_target.state_dict(),
-        "q_optimizer_state_dict": q_optimizer.state_dict(),
-        "actor_optimizer_state_dict": actor_optimizer.state_dict(),
-        "args": vars(args),
-    }
-
-    if args.autotune:
-        checkpoint["log_alpha_state_dict"] = log_alpha.detach().cpu()
-        checkpoint["a_optimizer_state_dict"] = a_optimizer.state_dict()
-        checkpoint["alpha"] = alpha
-
-    if args.agent_arch.lower() == "cdlgnn":
-        threshold_tensor = thresholds
-        if threshold_tensor is None and hasattr(actor, "binarization") and hasattr(actor.binarization, "thresholds"):
-            threshold_tensor = actor.binarization.thresholds
-        if threshold_tensor is not None:
-            checkpoint["thresholds"] = threshold_tensor.detach().cpu()
-
-    torch.save(checkpoint, f"runs/{run_name}/checkpoint.pt")
+    save_checkpoint(
+        checkpoint_path=f"runs/{run_name}/checkpoint_final.pt",
+        actor=actor,
+        qf1=qf1,
+        qf2=qf2,
+        qf1_target=qf1_target,
+        qf2_target=qf2_target,
+        q_optimizer=q_optimizer,
+        actor_optimizer=actor_optimizer,
+        args=args,
+        autotune=args.autotune,
+        alpha=alpha,
+        thresholds=thresholds,
+        log_alpha=log_alpha if args.autotune else None,
+        a_optimizer=a_optimizer if args.autotune else None,
+    )
 
     envs.close()
     writer.close()

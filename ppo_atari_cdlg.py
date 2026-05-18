@@ -65,11 +65,11 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
-    total_timesteps: int = 500_000 #10000000
+    total_timesteps: int = 1_000_000 #10000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    logic_learning_rate: float = 1e-2
+    logic_learning_rate: float = 3e-2
     """learning rate used when the CDLGNN backbone is selected (torchlogix-typical)"""
     agent_arch: str = "cdlgnn"
     """agent architecture: 'cnn' (original) or 'cdlgnn' (torchlogix logic conv net)"""
@@ -429,6 +429,7 @@ class CDLGAagent(nn.Module):
     def _actor_features(self, x: torch.Tensor) -> torch.Tensor:
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
         x = self.binarization(x/255.0)
+        print(f"Actor backbone input shape: {x.shape}")
         return self.actor_logic_backbone(x)
 
     def _critic_features(self, x: torch.Tensor) -> torch.Tensor:
@@ -532,6 +533,30 @@ def get_distributive_channel_thresholds(calibration_obs: torch.Tensor, num_bits:
     )
 
 
+def save_checkpoint(
+    *,
+    checkpoint_path: str,
+    agent: nn.Module,
+    optimizer: optim.Optimizer,
+    args: Args,
+    thresholds: torch.Tensor | None = None,
+):
+    checkpoint = {
+        "model_state_dict": agent.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "args": vars(args),
+    }
+
+    if args.agent_arch.lower() == "cdlgnn":
+        threshold_tensor = thresholds
+        if threshold_tensor is None and hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
+            threshold_tensor = agent.binarization.thresholds
+        if threshold_tensor is not None:
+            checkpoint["thresholds"] = threshold_tensor.detach().cpu()
+
+    torch.save(checkpoint, checkpoint_path)
+
+
 if __name__ == "__main__":
     args = tyro.cli(Args)
 
@@ -623,8 +648,8 @@ if __name__ == "__main__":
                 [
                     {
                         "params": (
-                            list(agent.binarization.parameters())
-                            + list(agent.actor_logic_backbone.parameters())
+                            #list(agent.binarization.parameters()) +
+                            list(agent.actor_logic_backbone.parameters())
                             + list(agent.actor.parameters())
                         ),
                         "lr": args.logic_learning_rate,
@@ -799,24 +824,27 @@ if __name__ == "__main__":
             rt_mean = float(np.mean(eval_returns))
             ret_std = float(np.std(eval_returns))
             print(f"mean return={rt_mean:.2f} +/- {ret_std:.2f}; mean length={np.mean(eval_lengths):.2f}")
+
+        if global_step % 250000 == 0:
+            os.makedirs(f"runs/{run_name}", exist_ok=True)
+            save_checkpoint(
+                checkpoint_path=f"runs/{run_name}/checkpoint_{global_step}.pt",
+                agent=agent,
+                optimizer=optimizer,
+                args=args,
+                thresholds=thresholds,
+            )
             
 
     # Save final checkpoint and keep threshold initialization tensor for reproducibility.
     os.makedirs(f"runs/{run_name}", exist_ok=True)
-    checkpoint = {
-        "model_state_dict": agent.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "args": vars(args),
-    }
-
-    if args.agent_arch.lower() == "cdlgnn":
-        threshold_tensor = thresholds
-        if threshold_tensor is None and hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
-            threshold_tensor = agent.binarization.thresholds
-        if threshold_tensor is not None:
-            checkpoint["thresholds"] = threshold_tensor.detach().cpu()
-
-    torch.save(checkpoint, f"runs/{run_name}/checkpoint.pt")
+    save_checkpoint(
+        checkpoint_path=f"runs/{run_name}/checkpoint.pt",
+        agent=agent,
+        optimizer=optimizer,
+        args=args,
+        thresholds=thresholds,
+    )
 
     envs.close()
     writer.close()
