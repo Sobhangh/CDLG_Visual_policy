@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from tqdm import tqdm
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
@@ -22,6 +23,11 @@ except ImportError:
     LogicConv2d = None
     LogicDense = None
     OrPooling2d = None
+
+try:
+    import ale_py
+except ImportError:
+    ale_py = None
 
 from atari_wrappers import (
     ClipRewardEnv,
@@ -49,7 +55,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = False
+    capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     agent_arch: str = "cdlgnn"
@@ -447,6 +453,10 @@ class LogicActor(nn.Module):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
+    
+    if ale_py is not None:
+        gym.register_envs(ale_py)
+    
     if args.agent_arch.lower() == "cdlgnn":
         required_layers = {
             "Binarization": Binarization,
@@ -531,7 +541,7 @@ if __name__ == "__main__":
         handle_timeout_termination=False,
     )
     start_time = time.time()
-    for global_step in range(args.total_timesteps):
+    for global_step in tqdm(range(1, args.total_timesteps + 1)):
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
@@ -631,7 +641,7 @@ if __name__ == "__main__":
                 for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
-            if global_step % (args.target_network_frequency * 20) == 0:
+            if global_step % (args.total_timesteps // 20) == 0:
                 eval_returns, eval_lengths = evaluate(
                     actor,
                     make_env_fn=make_env,
