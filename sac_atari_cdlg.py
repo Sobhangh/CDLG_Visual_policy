@@ -66,7 +66,7 @@ class Args:
     """the id of the environment"""
     total_timesteps: int = 500_000
     """total timesteps of the experiments"""
-    buffer_size: int = int(5e6)
+    buffer_size: int = int(2e6)
     """the replay memory buffer size"""  #10e6 smaller than in original paper but evaluation is done only for 100k steps anyway
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -76,7 +76,7 @@ class Args:
     """the batch size of sample from the reply memory"""
     learning_starts: int = 2e4
     """timestep to start learning"""
-    policy_lr: float = 3e-4
+    policy_lr: float = 3e-3
     """the learning rate of the policy network optimizer"""
     q_lr: float = 3e-4
     """the learning rate of the Q network network optimizer"""
@@ -98,11 +98,11 @@ class Args:
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 128
+    logic_k_num: int = 100
     """base kernel width multiplier for CDLGNN"""
-    logic_actor_group_size:int = 200
+    logic_actor_group_size:int = 150
     """group size for the final GroupSum layer in the actor head. Should be set to num_actions for best performance."""
-    logic_tau: float = 40.0
+    logic_tau: float = 30.0
     """temperature parameter for the GroupSum layer"""
 
 
@@ -141,8 +141,9 @@ def evaluate(
     capture_video: bool = False,
     writer=None,
     global_step=0,
+    seed: int = 1,
 ):
-    envs = gym.vector.SyncVectorEnv([make_env_fn(env_id, 0, capture_video, run_name)])
+    envs = gym.vector.SyncVectorEnv([make_env_fn(env_id, seed, 0, capture_video, run_name)])
     agent.eval()
 
     obs_raw, _ = envs.reset()
@@ -418,19 +419,19 @@ class LogicActor(nn.Module):
         )
         self.fc1 = LogicDense(
                 in_dim=backbone_out_dim,
-                out_dim=actor_out_dim * 6,
+                out_dim=actor_out_dim * 2,
                 parametrization="warp",
                 lut_rank=args.logic_lut_rank,
                 connections_kwargs={"init_method": "random-unique"},
-            ),
+                )
         self.fc_logits = nn.Sequential(
-            LogicDense(
-                in_dim=actor_out_dim * 6,
-                out_dim=actor_out_dim,
-                parametrization="warp",
-                lut_rank=args.logic_lut_rank,
-                connections_kwargs={"init_method": "random-unique"},
-            ),
+            # LogicDense(
+            #     in_dim=actor_out_dim * 4,
+            #     out_dim=actor_out_dim * 2,
+            #     parametrization="warp",
+            #     lut_rank=args.logic_lut_rank,
+            #     connections_kwargs={"init_method": "random-unique"},
+            # ),
             GroupSum(k=n_actions, tau=args.logic_tau),
         )
 
@@ -438,7 +439,7 @@ class LogicActor(nn.Module):
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
         x = self.binarization(x/255.0)
         x = self.backbone(x)
-        x = (self.fc1(x))
+        x = self.fc1(x)
         logits = self.fc_logits(x)
         return logits
 
@@ -650,6 +651,7 @@ if __name__ == "__main__":
                     writer=writer,
                     device=device,
                     capture_video=False,
+                    seed=args.seed,
                     global_step=global_step,
                 )
                 rt_mean = float(np.mean(eval_returns))
@@ -664,10 +666,36 @@ if __name__ == "__main__":
                 writer.add_scalar("losses/qf_loss", qf_loss.item() / 2.0, global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/alpha", alpha, global_step)
-                print("SPS:", int(global_step / (time.time() - start_time)))
+                #print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
+
+    os.makedirs(f"runs/{run_name}", exist_ok=True)
+    checkpoint = {
+        "actor_state_dict": actor.state_dict(),
+        "qf1_state_dict": qf1.state_dict(),
+        "qf2_state_dict": qf2.state_dict(),
+        "qf1_target_state_dict": qf1_target.state_dict(),
+        "qf2_target_state_dict": qf2_target.state_dict(),
+        "q_optimizer_state_dict": q_optimizer.state_dict(),
+        "actor_optimizer_state_dict": actor_optimizer.state_dict(),
+        "args": vars(args),
+    }
+
+    if args.autotune:
+        checkpoint["log_alpha_state_dict"] = log_alpha.detach().cpu()
+        checkpoint["a_optimizer_state_dict"] = a_optimizer.state_dict()
+        checkpoint["alpha"] = alpha
+
+    if args.agent_arch.lower() == "cdlgnn":
+        threshold_tensor = thresholds
+        if threshold_tensor is None and hasattr(actor, "binarization") and hasattr(actor.binarization, "thresholds"):
+            threshold_tensor = actor.binarization.thresholds
+        if threshold_tensor is not None:
+            checkpoint["thresholds"] = threshold_tensor.detach().cpu()
+
+    torch.save(checkpoint, f"runs/{run_name}/checkpoint.pt")
 
     envs.close()
     writer.close()
