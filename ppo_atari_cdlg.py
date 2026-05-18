@@ -65,7 +65,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
-    total_timesteps: int = 1_000_000 #10000000
+    total_timesteps: int = 500_000 #10000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -293,7 +293,7 @@ def build_logic_actor_backbone(
             in_dim=h,
             channels=c0,
             num_kernels=k,
-            tree_depth=5,
+            tree_depth=4,
             receptive_field_size=6,
             stride=3,
             padding=0,
@@ -612,10 +612,12 @@ if __name__ == "__main__":
             num_bits=args.logic_num_bits,
         )
         if args.logic_shared_network:
+            print("Using shared CDLGNN backbone for actor and critic.")
             agent = CDLGAgentShared(envs, args=args, thresholds=thresholds).to(device)
             optimizer = optim.Adam(agent.parameters(), lr=args.logic_learning_rate, eps=1e-5)
             base_lrs = [args.logic_learning_rate]
         else:
+            print("Using separate CDLGNN backbone for actor and standard CNN for critic.")
             agent = CDLGAagent(envs, args=args, thresholds=thresholds).to(device)
             optimizer = optim.Adam(
                 [
