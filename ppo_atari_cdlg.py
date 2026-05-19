@@ -2,6 +2,7 @@
 import os
 import random
 import time
+import importlib
 from dataclasses import dataclass
 
 import gymnasium as gym
@@ -14,7 +15,12 @@ from tqdm import tqdm
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-from google.colab import files
+
+# drive = None
+# try:
+#     drive = importlib.import_module("google.colab.drive")
+# except ImportError:
+#     drive = None
 try:
     import ale_py
 except ImportError:
@@ -61,7 +67,13 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-
+    google_colab: bool = True
+    load_model: bool = False
+    """if True, load model/optimizer state from model_path before training"""
+    model_path: str = ""
+    """path to a checkpoint file (.pt) to load before training"""
+    print_state_dict: bool = False
+    """if True, print agent.state_dict() keys and tensor shapes once before training"""
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
@@ -555,7 +567,21 @@ def save_checkpoint(
             checkpoint["thresholds"] = threshold_tensor.detach().cpu()
 
     torch.save(checkpoint, checkpoint_path)
-    files.download(f"runs/{run_name}/checkpoint_{global_step}.pt")
+
+
+def load_checkpoint(
+    *,
+    checkpoint_path: str,
+    agent: nn.Module,
+    optimizer: optim.Optimizer,
+    device: torch.device,
+    load_optimizer_state: bool = True,
+):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    agent.load_state_dict(checkpoint["model_state_dict"])
+    if load_optimizer_state and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint
 
 
 if __name__ == "__main__":
@@ -587,9 +613,21 @@ if __name__ == "__main__":
             )
 
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    checkpoint_root = "runs"
+    if args.google_colab:
+        try:
+            #Mounting drive from a python script in colab would probably not work
+            #drive.mount("/content/drive", force_remount=False)
+            checkpoint_root = "/content/drive/MyDrive/VisualPolicyDWN_checkpoints"
+        except Exception:
+            checkpoint_root = "runs"
+    checkpoint_run_dir = os.path.join(checkpoint_root, run_name)
+    os.makedirs(checkpoint_run_dir, exist_ok=True)
+    print(f"Checkpoint directory: {checkpoint_run_dir}")
+
     if args.track:
         import wandb
-        
+        #TOD DO: remove hardcoded key and use environment variable imported from local file
         wandb.login(key="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")
         wandb.init(
             project=args.wandb_project_name,
@@ -668,6 +706,33 @@ if __name__ == "__main__":
         agent = Agent(envs).to(device)
         optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
         base_lrs = [args.learning_rate]
+
+    if args.load_model:
+        if not args.model_path:
+            raise ValueError("--load-model is enabled, but --model-path is empty.")
+        if not os.path.isfile(args.model_path):
+            raise FileNotFoundError(f"Checkpoint not found: {args.model_path}")
+        loaded_checkpoint = load_checkpoint(
+            checkpoint_path=args.model_path,
+            agent=agent,
+            optimizer=optimizer,
+            device=device,
+            load_optimizer_state=True,
+        )
+        print("Loaded model and optimizer state from checkpoint. Agent thresholds:")
+        print(agent.binarization.thresholds)
+        if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
+            thresholds = loaded_checkpoint["thresholds"].to(device)
+            print(f"Loaded thresholds from checkpoint: {thresholds}")
+            if hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
+                with torch.no_grad():
+                    agent.binarization.thresholds.copy_(thresholds)
+        print(f"Loaded checkpoint from: {args.model_path}")
+
+    if args.print_state_dict:
+        print("Agent state_dict entries:")
+        for name, tensor in agent.state_dict().items():
+            print(f"{name}: {tuple(tensor.shape)}")
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -814,7 +879,7 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         #print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        if iteration % 100 == 0:
+        if iteration % (args.num_iterations // 10 ) == 0:
             eval_returns, eval_lengths = evaluate(
                 agent,
                 make_env_fn=make_env,
@@ -828,25 +893,27 @@ if __name__ == "__main__":
             print(f"mean return={rt_mean:.2f} +/- {ret_std:.2f}; mean length={np.mean(eval_lengths):.2f}")
 
         if iteration % (args.num_iterations // 4 ) == 0:
-            os.makedirs(f"runs/{run_name}", exist_ok=True)
+            checkpoint_path = os.path.join(checkpoint_run_dir, f"checkpoint_{global_step}.pt")
             save_checkpoint(
-                checkpoint_path=f"runs/{run_name}/checkpoint_{global_step}.pt",
+                checkpoint_path=checkpoint_path,
                 agent=agent,
                 optimizer=optimizer,
                 args=args,
                 thresholds=thresholds,
             )
+            print(f"Saved checkpoint: {checkpoint_path}")
             
 
     # Save final checkpoint and keep threshold initialization tensor for reproducibility.
-    os.makedirs(f"runs/{run_name}", exist_ok=True)
+    final_checkpoint_path = os.path.join(checkpoint_run_dir, "checkpoint.pt")
     save_checkpoint(
-        checkpoint_path=f"runs/{run_name}/checkpoint.pt",
+        checkpoint_path=final_checkpoint_path,
         agent=agent,
         optimizer=optimizer,
         args=args,
         thresholds=thresholds,
     )
+    print(f"Saved final checkpoint: {final_checkpoint_path}")
 
     envs.close()
     writer.close()
