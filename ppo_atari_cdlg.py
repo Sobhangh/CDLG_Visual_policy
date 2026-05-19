@@ -14,7 +14,7 @@ from tqdm import tqdm
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
+from google.colab import files
 try:
     import ale_py
 except ImportError:
@@ -53,7 +53,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -65,7 +65,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
-    total_timesteps: int = 1_000_000 #10000000
+    total_timesteps: int = 2_000_000 #10000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -95,7 +95,7 @@ class Args:
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
     ent_coef: float = 0.01
     """coefficient of the entropy"""
-    vf_coef: float = 0.5
+    vf_coef: float = 1.0 #0.5
     """coefficient of the value function"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
@@ -115,7 +115,7 @@ class Args:
     """temperature scaling value for logic features (reported for reproducibility)"""
     logic_sampling_temperature: float = 0.1
     """soft binarization temperature during training"""
-    logic_actor_group_size: int = 1024
+    logic_actor_group_size: int = 512
     """number of logic neurons per action class; actor LogicDense outputs n_actions * this,
     then GroupSum sums each group into one logit per action"""
     logic_shared_network: bool = False
@@ -429,7 +429,7 @@ class CDLGAagent(nn.Module):
     def _actor_features(self, x: torch.Tensor) -> torch.Tensor:
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
         x = self.binarization(x/255.0)
-        print(f"Actor backbone input shape: {x.shape}")
+        #print(f"Actor backbone input shape: {x.shape}")
         return self.actor_logic_backbone(x)
 
     def _critic_features(self, x: torch.Tensor) -> torch.Tensor:
@@ -555,6 +555,7 @@ def save_checkpoint(
             checkpoint["thresholds"] = threshold_tensor.detach().cpu()
 
     torch.save(checkpoint, checkpoint_path)
+    files.download(f"runs/{run_name}/checkpoint_{global_step}.pt")
 
 
 if __name__ == "__main__":
@@ -588,7 +589,8 @@ if __name__ == "__main__":
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
-
+        
+        wandb.login(key="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")
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
@@ -812,7 +814,7 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         #print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        if iteration % 20 == 0:
+        if iteration % 100 == 0:
             eval_returns, eval_lengths = evaluate(
                 agent,
                 make_env_fn=make_env,
@@ -825,7 +827,7 @@ if __name__ == "__main__":
             ret_std = float(np.std(eval_returns))
             print(f"mean return={rt_mean:.2f} +/- {ret_std:.2f}; mean length={np.mean(eval_lengths):.2f}")
 
-        if global_step % 250000 == 0:
+        if iteration % (args.num_iterations // 4 ) == 0:
             os.makedirs(f"runs/{run_name}", exist_ok=True)
             save_checkpoint(
                 checkpoint_path=f"runs/{run_name}/checkpoint_{global_step}.pt",
