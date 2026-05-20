@@ -72,8 +72,8 @@ class Args:
     """if True, load model/optimizer state from model_path before training"""
     model_path: str = ""
     """path to a checkpoint file (.pt) to load before training"""
-    print_state_dict: bool = False
-    """if True, print agent.state_dict() keys and tensor shapes once before training"""
+    
+
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
@@ -89,7 +89,7 @@ class Args:
     """the number of parallel game environments"""
     num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
+    anneal_lr: bool = False
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -721,18 +721,17 @@ if __name__ == "__main__":
         )
         print("Loaded model and optimizer state from checkpoint. Agent thresholds:")
         print(agent.binarization.thresholds)
-        if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
-            thresholds = loaded_checkpoint["thresholds"].to(device)
-            print(f"Loaded thresholds from checkpoint: {thresholds}")
-            if hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
-                with torch.no_grad():
-                    agent.binarization.thresholds.copy_(thresholds)
-        print(f"Loaded checkpoint from: {args.model_path}")
+        # if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
+        #     thresholds = loaded_checkpoint["thresholds"].to(device)
+        #     print(f"Loaded thresholds from checkpoint: {thresholds}")
+        #     if hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
+        #         with torch.no_grad():
+        #             agent.binarization.thresholds.copy_(thresholds)
+        #print(f"Loaded checkpoint from: {args.model_path}")
 
-    if args.print_state_dict:
-        print("Agent state_dict entries:")
-        for name, tensor in agent.state_dict().items():
-            print(f"{name}: {tuple(tensor.shape)}")
+    # print("Agent state_dict entries:")
+    # for name, tensor in agent.state_dict().items():
+    #     print(f"{name}: {tuple(tensor.shape)}")
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
