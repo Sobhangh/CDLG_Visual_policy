@@ -83,7 +83,7 @@ class Args:
     """the learning rate of the optimizer"""
     logic_learning_rate: float = 3e-2
     """learning rate used when the CDLGNN backbone is selected (torchlogix-typical)"""
-    agent_arch: str = "cdlgnn"
+    agent_arch: str = "cnn"
     """agent architecture: 'cnn' (original) or 'cdlgnn' (torchlogix logic conv net)"""
     num_envs: int = 8
     """the number of parallel game environments"""
@@ -721,6 +721,8 @@ if __name__ == "__main__":
         )
         print("Loaded model and optimizer state from checkpoint. Agent thresholds:")
         print(agent.binarization.thresholds)
+        optimizer.param_groups[0]["lr"] = args.logic_learning_rate
+        optimizer.param_groups[1]["lr"] = args.learning_rate
         # if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
         #     thresholds = loaded_checkpoint["thresholds"].to(device)
         #     print(f"Loaded thresholds from checkpoint: {thresholds}")
