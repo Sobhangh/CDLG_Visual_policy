@@ -31,21 +31,21 @@ from ppo_atari_cdlg import (
 
 @dataclass
 class Args:
-	mode: str = "train"
+	mode: str = "both"
 	"""one of: collect, train, both, stream"""
 
 	# Shared
 	seed: int = 1
 	cuda: bool = True
 	env_id: str = "PongNoFrameskip-v4"
-	num_envs: int = 8
+	num_envs: int = 3
 
 	# Teacher / collection
 	teacher_checkpoint_path: str = ""
 	"""path to checkpoint of CNN teacher (Agent class)"""
 	random_action_prob: float = 0.05
 	"""epsilon for random actions during collection"""
-	max_buffer_gb: float = 10.0
+	max_buffer_gb: float = 5.0
 	"""hard cap for (observation, logits) buffer size on disk"""
 	collect_max_steps: int = 0
 	"""optional step cap; 0 means collect until storage cap"""
@@ -567,6 +567,17 @@ def train_distillation(args: Args):
                 val_top1=val_top1,
                 ckpt_name=f"student_epoch_{epoch}.pt",
             )
+		if epoch % (args.epochs // 2) == 0:
+			eval_returns, eval_lengths = evaluate(
+                agent=student,
+                make_env_fn=make_env,
+                env_id=args.env_id,
+                eval_episodes=args.eval_episodes,
+                device=device,
+                capture_video=False,
+                writer=None,
+                global_step=0,
+            )
 
 	_save_student_checkpoint(
 		args=args,
@@ -580,16 +591,7 @@ def train_distillation(args: Args):
 		ckpt_name="student_distilled.pt",
 	)
 	print(f"Saved final distilled student to: {os.path.join(args.output_dir, 'student_distilled.pt')}")
-	eval_returns, eval_lengths = evaluate(
-		agent=student,
-		make_env_fn=make_env,
-		env_id=args.env_id,
-		eval_episodes=args.eval_episodes,
-		device=device,
-		capture_video=False,
-		writer=None,
-		global_step=0,
-	)
+	
 	print(
 		f"Final student eval: return_mean={np.mean(eval_returns):.2f} +/- {np.std(eval_returns):.2f}, "
 		f"length_mean={np.mean(eval_lengths):.2f}"
