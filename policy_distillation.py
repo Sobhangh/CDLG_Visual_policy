@@ -31,7 +31,7 @@ from ppo_atari_cdlg import (
 
 @dataclass
 class Args:
-	mode: str = "both"
+	mode: str = "train"
 	"""one of: collect, train, both, stream"""
 
 	# Shared
