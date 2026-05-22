@@ -70,6 +70,8 @@ class Args:
     google_colab: bool = True
     load_model: bool = False
     """if True, load model/optimizer state from model_path before training"""
+    cnn_critic_load_model: bool = False
+    """if True, load model/optimizer state for CNN critic from model_path before training"""
     model_path: str = ""
     """path to a checkpoint file (.pt) to load before training"""
     
@@ -77,7 +79,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "PongNoFrameskip-v4"
     """the id of the environment"""
-    total_timesteps: int = 7_000_000 #10000000
+    total_timesteps: int = 10_000_000 #10000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -89,7 +91,7 @@ class Args:
     """the number of parallel game environments"""
     num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = False
+    anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -612,7 +614,7 @@ if __name__ == "__main__":
                 + "for example with 'pip install -e ./torchlogix'."
             )
 
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.agent_arch}__{args.exp_name}__{args.seed}__{int(time.time())}"
     checkpoint_root = "runs"
     if args.google_colab:
         try:
@@ -712,24 +714,33 @@ if __name__ == "__main__":
             raise ValueError("--load-model is enabled, but --model-path is empty.")
         if not os.path.isfile(args.model_path):
             raise FileNotFoundError(f"Checkpoint not found: {args.model_path}")
-        loaded_checkpoint = load_checkpoint(
-            checkpoint_path=args.model_path,
-            agent=agent,
-            optimizer=optimizer,
-            device=device,
-            load_optimizer_state=True,
-        )
-        print("Loaded model and optimizer state from checkpoint. Agent thresholds:")
-        print(agent.binarization.thresholds)
-        optimizer.param_groups[0]["lr"] = args.logic_learning_rate
-        optimizer.param_groups[1]["lr"] = args.learning_rate
-        # if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
-        #     thresholds = loaded_checkpoint["thresholds"].to(device)
-        #     print(f"Loaded thresholds from checkpoint: {thresholds}")
-        #     if hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
-        #         with torch.no_grad():
-        #             agent.binarization.thresholds.copy_(thresholds)
-        #print(f"Loaded checkpoint from: {args.model_path}")
+        if args.cnn_critic_load_model and args.agent_arch.lower() == "cdlgnn":
+            agnet_temp = Agent(envs).to(device)
+            checkpoint = torch.load(args.model_path, map_location=device)
+            agnet_temp.load_state_dict(checkpoint["model_state_dict"])
+            agent.critic_network.load_state_dict(agnet_temp.network.state_dict())
+            agent.critic.load_state_dict(agnet_temp.critic.state_dict())
+            optimizer = optim.Adam([{"params": (list(agent.actor_logic_backbone.parameters())+ list(agent.actor.parameters())),"lr": args.logic_learning_rate,}],eps=1e-5)
+            print("Loaded CNN critic state from checkpoint for CDLGNN agent.")
+        else:
+            loaded_checkpoint = load_checkpoint(
+                checkpoint_path=args.model_path,
+                agent=agent,
+                optimizer=optimizer,
+                device=device,
+                load_optimizer_state=True,
+            )
+            print("Loaded model and optimizer state from checkpoint. Agent thresholds:")
+            print(agent.binarization.thresholds)
+            optimizer.param_groups[0]["lr"] = args.logic_learning_rate
+            optimizer.param_groups[1]["lr"] = args.learning_rate
+            # if args.agent_arch.lower() == "cdlgnn" and "thresholds" in loaded_checkpoint:
+            #     thresholds = loaded_checkpoint["thresholds"].to(device)
+            #     print(f"Loaded thresholds from checkpoint: {thresholds}")
+            #     if hasattr(agent, "binarization") and hasattr(agent.binarization, "thresholds"):
+            #         with torch.no_grad():
+            #             agent.binarization.thresholds.copy_(thresholds)
+            #print(f"Loaded checkpoint from: {args.model_path}")
 
     # print("Agent state_dict entries:")
     # for name, tensor in agent.state_dict().items():
