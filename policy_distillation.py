@@ -22,6 +22,7 @@ from ppo_atari_cdlg import (
 	Args as PPOArgs,
 	CDLGAagent,
 	ensure_nchw,
+	evaluate,
 	get_distributive_channel_thresholds,
 	load_checkpoint,
 	make_env,
@@ -30,7 +31,7 @@ from ppo_atari_cdlg import (
 
 @dataclass
 class Args:
-	mode: str = "both"
+	mode: str = "train"
 	"""one of: collect, train, both, stream"""
 
 	# Shared
@@ -44,7 +45,7 @@ class Args:
 	"""path to checkpoint of CNN teacher (Agent class)"""
 	random_action_prob: float = 0.05
 	"""epsilon for random actions during collection"""
-	max_buffer_gb: float = 20.0
+	max_buffer_gb: float = 10.0
 	"""hard cap for (observation, logits) buffer size on disk"""
 	collect_max_steps: int = 0
 	"""optional step cap; 0 means collect until storage cap"""
@@ -52,9 +53,11 @@ class Args:
 	# Distillation
 	dataset_dir: str = "distill_dataset"
 	output_dir: str = "distill_runs"
-	batch_size: int = 256
+	batch_size: int = 1024
 	num_workers: int = 0
-	epochs: int = 100
+	epochs: int = 10
+	eval_episodes: int = 10
+	"""number of episodes for final student evaluation"""
 	student_lr: float = 3e-2
 	temperature: float = 0.1
 	"""distillation temperature used in KL loss"""
@@ -577,6 +580,20 @@ def train_distillation(args: Args):
 		ckpt_name="student_distilled.pt",
 	)
 	print(f"Saved final distilled student to: {os.path.join(args.output_dir, 'student_distilled.pt')}")
+	eval_returns, eval_lengths = evaluate(
+		agent=student,
+		make_env_fn=make_env,
+		env_id=args.env_id,
+		eval_episodes=args.eval_episodes,
+		device=device,
+		capture_video=False,
+		writer=None,
+		global_step=0,
+	)
+	print(
+		f"Final student eval: return_mean={np.mean(eval_returns):.2f} +/- {np.std(eval_returns):.2f}, "
+		f"length_mean={np.mean(eval_lengths):.2f}"
+	)
 	envs.close()
 
 
@@ -683,6 +700,20 @@ def train_distillation_stream(args: Args):
 		ckpt_name="student_stream_final.pt",
 	)
 	print(f"Saved streaming distilled student to: {os.path.join(args.output_dir, 'student_stream_final.pt')}")
+	eval_returns, eval_lengths = evaluate(
+		agent=student,
+		make_env_fn=make_env,
+		env_id=args.env_id,
+		eval_episodes=args.eval_episodes,
+		device=device,
+		capture_video=False,
+		writer=None,
+		global_step=0,
+	)
+	print(
+		f"Final student eval: return_mean={np.mean(eval_returns):.2f} +/- {np.std(eval_returns):.2f}, "
+		f"length_mean={np.mean(eval_lengths):.2f}"
+	)
 	envs.close()
 
 
@@ -698,6 +729,7 @@ def main():
 		train_distillation(args)
 	if args.mode == "stream":
 		train_distillation_stream(args)
+	
 
 
 if __name__ == "__main__":
