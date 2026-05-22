@@ -539,7 +539,7 @@ def train_distillation(args: Args):
 		val_top1 = None
 		if val_loader is not None:
 			if epoch % (args.epochs // 10) == 0:
-                val_kl, val_top1 = run_epoch(
+				val_kl, val_top1 = run_epoch(
                     student=student,
                     loader=val_loader,
                     optimizer=None,
@@ -547,14 +547,13 @@ def train_distillation(args: Args):
                     temperature=args.temperature,
                     desc=f"Val {epoch}/{args.epochs}",
                 )
-
-                print(
+				print(
                     f"Epoch {epoch}: train_kl={train_kl:.6f}, train_top1={train_top1:.4f}"
                     + ("" if val_kl is None else f", val_kl={val_kl:.6f}, val_top1={val_top1:.4f}")
                 )
 		
 		if epoch % (args.epochs // 4) == 0:
-            _save_student_checkpoint(
+			_save_student_checkpoint(
                 args=args,
                 student=student,
                 optimizer=optimizer,
