@@ -31,7 +31,7 @@ from ppo_atari_cdlg import (
 
 @dataclass
 class Args:
-	mode: str = "train"
+	mode: str = "both"
 	"""one of: collect, train, both, stream"""
 
 	# Shared
@@ -206,7 +206,9 @@ def _collection_budget(args: Args, n_actions: int) -> tuple[int, int]:
 		raise ValueError("max_buffer_gb is too small to store even one sample.")
 	return max_samples, per_sample_bytes
 
-
+AVG_EPISODE_LENGTH = 10000  
+AVG_SAMPLE_PER_EPISODE = 100
+OBS_STEP = AVG_EPISODE_LENGTH // AVG_SAMPLE_PER_EPISODE
 def collect_dataset(args: Args):
 	set_seed(args.seed)
 	device = get_device(args.cuda)
@@ -237,16 +239,17 @@ def collect_dataset(args: Args):
 		while written < max_samples:
 			if args.collect_max_steps > 0 and total_steps >= args.collect_max_steps:
 				break
-
+			stepnb = random.randint(1, OBS_STEP) if total_steps == 0 else OBS_STEP
+			for _ in range(stepnb):
+				obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
+				teacher_logits = get_actor_logits(teacher, obs_t)
+				sampled_actions = Categorical(logits=teacher_logits).sample()
+				random_mask = torch.rand(args.num_envs, device=device) < args.random_action_prob
+				random_actions = torch.randint(0, n_actions, (args.num_envs,), device=device)
+				actions = torch.where(random_mask, random_actions, sampled_actions)
+				next_obs_raw, _, _, _, _ = envs.step(actions.detach().cpu().numpy())
+				total_steps += 1
 			obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
-			#obs_t = ensure_nchw(obs_t, expected_channels=4)
-
-			teacher_logits = get_actor_logits(teacher, obs_t)
-			sampled_actions = Categorical(logits=teacher_logits).sample()
-
-			random_mask = torch.rand(args.num_envs, device=device) < args.random_action_prob
-			random_actions = torch.randint(0, n_actions, (args.num_envs,), device=device)
-			actions = torch.where(random_mask, random_actions, sampled_actions)
 
 			# Keep only samples where the executed action came from the teacher policy.
 			policy_idx = (~random_mask).nonzero(as_tuple=False).squeeze(-1)
@@ -259,8 +262,8 @@ def collect_dataset(args: Args):
 				written += to_write
 				pbar.update(to_write)
 
-			next_obs_raw, _, _, _, _ = envs.step(actions.detach().cpu().numpy())
-			total_steps += 1
+			# next_obs_raw, _, _, _, _ = envs.step(actions.detach().cpu().numpy())
+			# total_steps += 1
 
 	pbar.close()
 	obs_mm.flush()
