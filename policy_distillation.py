@@ -38,7 +38,7 @@ class Args:
 	seed: int = 1
 	cuda: bool = True
 	env_id: str = "PongNoFrameskip-v4"
-	num_envs: int = 3
+	num_envs: int = 2
 
 	# Teacher / collection
 	teacher_checkpoint_path: str = ""
@@ -239,7 +239,7 @@ def collect_dataset(args: Args):
 		while written < max_samples:
 			if args.collect_max_steps > 0 and total_steps >= args.collect_max_steps:
 				break
-			stepnb = random.randint(1, OBS_STEP) if total_steps == 0 else OBS_STEP
+			stepnb = 1 #random.randint(1, OBS_STEP) if total_steps == 0 else OBS_STEP
 			for _ in range(stepnb):
 				obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
 				teacher_logits = get_actor_logits(teacher, obs_t)
