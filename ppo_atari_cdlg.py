@@ -224,8 +224,17 @@ def evaluate(
     return episodic_returns, episodic_lengths
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
+    # orthogonal_ is not implemented for CPU float16; initialize in float32 and cast back.
+    weight_dtype = layer.weight.dtype
+    if layer.weight.device.type == "cpu" and weight_dtype == torch.float16:
+        with torch.no_grad():
+            w = layer.weight.data.float()
+            torch.nn.init.orthogonal_(w, std)
+            layer.weight.data.copy_(w.to(dtype=weight_dtype))
+    else:
+        torch.nn.init.orthogonal_(layer.weight, std)
+    if layer.bias is not None:
+        torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
 
