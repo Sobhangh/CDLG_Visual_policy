@@ -1,0 +1,8 @@
+[flake8]
+max-line-length = 88
+extend-ignore = E203, W503, D100, D107, D105
+# excluding files that weren't authored by me
+exclude = .git,__pycache__,build,dist,*.egg-info,experiments
+per-file-ignores =
+    __init__.py: F401
+max-complexity = 10

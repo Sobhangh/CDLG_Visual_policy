@@ -166,6 +166,16 @@ def make_env(env_id, idx, capture_video, run_name):
 
     return thunk
 
+
+def get_runtime_dtype(device: torch.device) -> torch.dtype:
+    return torch.float16 if device.type == "cuda" else torch.float32
+
+
+def get_module_dtype(module: nn.Module) -> torch.dtype:
+    for param in module.parameters():
+        return param.dtype
+    return torch.float32
+
 def evaluate(
     agent,
     make_env_fn,
@@ -179,14 +189,15 @@ def evaluate(
 ):
     envs = gym.vector.SyncVectorEnv([make_env_fn(env_id, 0, capture_video, run_name)])
     agent.eval()
+    model_dtype = get_module_dtype(agent)
 
     obs_raw, _ = envs.reset()
-    obs = torch.as_tensor(obs_raw, dtype=torch.float32, device=device)
+    obs = torch.as_tensor(obs_raw, dtype=model_dtype, device=device)
     episodic_returns = []
     episodic_lengths = []
     while len(episodic_returns) < eval_episodes:
         with torch.no_grad():
-            actions, _, _, _ = agent.get_action_and_value(torch.as_tensor(obs, dtype=torch.float32, device=device))
+            actions, _, _, _ = agent.get_action_and_value(torch.as_tensor(obs, dtype=model_dtype, device=device))
         next_obs_raw, _, _, _, infos = envs.step(actions.cpu().numpy())
         if "episode" in infos:
             ep_mask = infos.get("_episode", np.ones(len(infos["episode"]["r"]), dtype=bool))
@@ -200,7 +211,7 @@ def evaluate(
                 if info and "episode" in info:
                     episodic_returns.append(float(info["episode"]["r"]))
                     episodic_lengths.append(int(info["episode"]["l"]))
-        obs = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
+        obs = torch.as_tensor(next_obs_raw, dtype=model_dtype, device=device)
 
     ret_mean = float(np.mean(episodic_returns))
     ret_std = float(np.std(episodic_returns))
@@ -307,11 +318,12 @@ def build_logic_actor_backbone(
             in_dim=h,
             channels=c0,
             num_kernels=k,
-            tree_depth=4,
+            tree_depth=5,
             receptive_field_size=6,
             stride=3,
             padding=0,
             lut_rank=lut_rank,
+            grad_factor=2,
             connections_kwargs={"init_method": "random-unique"},
             parametrization=parametrization,
         ),
@@ -319,54 +331,59 @@ def build_logic_actor_backbone(
         LogicConv2d(
             in_dim=13,
             channels=k,
-            num_kernels=2 * k,
+            num_kernels=4 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=2,
             padding=0,
             lut_rank=lut_rank,
+            grad_factor=2,
             connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
             parametrization=parametrization,
         ),
         LogicConv2d(
             in_dim=6,
-            channels=2 * k,
-            num_kernels=4 * k,
+            channels=4 * k,
+            num_kernels=16 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=1,
             padding=0,
+            grad_factor=2,
             lut_rank=lut_rank,
             connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
             parametrization=parametrization,
         ),
         LogicConv2d(
             in_dim=4,
-            channels=4 * k,
-            num_kernels=8 * k,
+            channels=16 * k,
+            num_kernels=32 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=1,
             padding=0,
+            grad_factor=2,
             lut_rank=lut_rank,
             connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
             parametrization=parametrization,
         ),
         nn.Flatten(),
         LogicDense(
-            in_dim=8 * k * 2 * 2,
+            in_dim=32 * k * 2 * 2,
+            out_dim=actor_out_dim * 4,
+            parametrization=parametrization,
+            lut_rank=lut_rank,
+            grad_factor=2,
+            connections_kwargs={"init_method": "random-unique"},
+        ),
+        LogicDense(
+            in_dim=actor_out_dim * 4,
             out_dim=actor_out_dim * 2,
             parametrization=parametrization,
             lut_rank=lut_rank,
+            grad_factor=2,
             connections_kwargs={"init_method": "random-unique"},
         ),
-        # LogicDense(
-        #     in_dim=actor_out_dim * 2,
-        #     out_dim=actor_out_dim * 2,
-        #     parametrization=parametrization,
-        #     lut_rank=lut_rank,
-        #     connections_kwargs={"init_method": "random-unique"},
-        # ),
     )
     return backbone, actor_out_dim * 2
 
@@ -653,6 +670,8 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    torch.set_default_dtype(get_runtime_dtype(device))
+    runtime_dtype = get_runtime_dtype(device)
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -667,25 +686,25 @@ if __name__ == "__main__":
     #saved_png = save_one_grayscale_png(next_obs_raw, run_name=run_name)
     #if saved_png is not None:
     #    print(f"Saved grayscale frame to {saved_png}")
-    next_obs = torch.Tensor(next_obs_raw).to(device)
+    next_obs = torch.as_tensor(next_obs_raw, dtype=runtime_dtype, device=device)
     next_done = torch.zeros(args.num_envs).to(device)
     thresholds = None
 
     
     if args.agent_arch.lower() == "cdlgnn":
-        calibration_obs = ensure_nchw(next_obs, expected_channels=4).float() / 255.0
+        calibration_obs = ensure_nchw(next_obs, expected_channels=4) / 255.0
         thresholds = get_distributive_channel_thresholds(
             calibration_obs=calibration_obs,
             num_bits=args.logic_num_bits,
         )
         if args.logic_shared_network:
             print("Using shared CDLGNN backbone for actor and critic.")
-            agent = CDLGAgentShared(envs, args=args, thresholds=thresholds).to(device)
+            agent = CDLGAgentShared(envs, args=args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
             optimizer = optim.Adam(agent.parameters(), lr=args.logic_learning_rate, eps=1e-5)
             base_lrs = [args.logic_learning_rate]
         else:
             print("Using separate CDLGNN backbone for actor and standard CNN for critic.")
-            agent = CDLGAagent(envs, args=args, thresholds=thresholds).to(device)
+            agent = CDLGAagent(envs, args=args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
             optimizer = optim.Adam(
                 [
                     {
@@ -705,7 +724,7 @@ if __name__ == "__main__":
             )
             base_lrs = [args.logic_learning_rate, args.learning_rate]
     else:
-        agent = Agent(envs).to(device)
+        agent = Agent(envs).to(device=device, dtype=runtime_dtype)
         optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
         base_lrs = [args.learning_rate]
 
@@ -715,7 +734,7 @@ if __name__ == "__main__":
         if not os.path.isfile(args.model_path):
             raise FileNotFoundError(f"Checkpoint not found: {args.model_path}")
         if args.cnn_critic_load_model and args.agent_arch.lower() == "cdlgnn":
-            agnet_temp = Agent(envs).to(device)
+            agnet_temp = Agent(envs).to(device=device, dtype=runtime_dtype)
             checkpoint = torch.load(args.model_path, map_location=device)
             agnet_temp.load_state_dict(checkpoint["model_state_dict"])
             agent.critic_network.load_state_dict(agnet_temp.network.state_dict())
@@ -747,7 +766,7 @@ if __name__ == "__main__":
     #     print(f"{name}: {tuple(tensor.shape)}")
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
+    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape, dtype=runtime_dtype).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
     logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
@@ -777,7 +796,8 @@ if __name__ == "__main__":
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+            next_obs = torch.as_tensor(next_obs, dtype=runtime_dtype, device=device)
+            next_done = torch.as_tensor(next_done, dtype=torch.float32, device=device)
 
             if "episode" in infos:
                 ep_mask = infos.get("_episode", np.logical_or(terminations, truncations))

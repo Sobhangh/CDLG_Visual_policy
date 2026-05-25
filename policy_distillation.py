@@ -79,9 +79,9 @@ class Args:
 	logic_lut_rank: int = 2
 	logic_num_bits: int = 2
 	logic_tree_depth: int = 3
-	logic_k_num: int = 512
-	logic_tau: float = 280.0
-	logic_actor_group_size: int = 1024
+	logic_k_num: int = 256
+	logic_tau: float = 40.0
+	logic_actor_group_size: int = 512
 
 
 class DistillDataset(Dataset):
@@ -129,7 +129,7 @@ class DistillDataset(Dataset):
 	def __getitem__(self, idx: int):
 		self._ensure_open()
 		obs = torch.from_numpy(np.asarray(self._obs[idx], dtype=np.uint8))
-		logits = torch.from_numpy(np.asarray(self._logits[idx], dtype=np.float32))
+		logits = torch.from_numpy(np.asarray(self._logits[idx], dtype=np.float16))
 		return obs, logits
 
 
@@ -189,7 +189,7 @@ class ShardDistillDataset(Dataset):
 		start = 0 if shard_idx == 0 else self.cum_sizes[shard_idx - 1]
 		local_idx = idx - start
 		obs = torch.from_numpy(np.asarray(self._obs_arrays[shard_idx][local_idx], dtype=np.uint8))
-		logits = torch.from_numpy(np.asarray(self._logit_arrays[shard_idx][local_idx], dtype=np.float32))
+		logits = torch.from_numpy(np.asarray(self._logit_arrays[shard_idx][local_idx], dtype=np.float16))
 		return obs, logits
 
 
@@ -201,6 +201,16 @@ def set_seed(seed: int):
 
 def get_device(cuda: bool) -> torch.device:
 	return torch.device("cuda" if cuda and torch.cuda.is_available() else "cpu")
+
+
+def get_runtime_dtype(device: torch.device) -> torch.dtype:
+	return torch.float16 if device.type == "cuda" else torch.float32
+
+
+def get_module_dtype(module: torch.nn.Module) -> torch.dtype:
+	for param in module.parameters():
+		return param.dtype
+	return torch.float32
 
 
 def build_teacher(envs: gym.vector.SyncVectorEnv, checkpoint_path: str, device: torch.device) -> Agent:
@@ -218,6 +228,7 @@ def build_teacher(envs: gym.vector.SyncVectorEnv, checkpoint_path: str, device: 
 		device=device,
 		load_optimizer_state=False,
 	)
+	teacher = teacher.to(device=device, dtype=get_runtime_dtype(device))
 	teacher.eval()
 	return teacher
 
@@ -253,6 +264,7 @@ OBS_STEP = AVG_EPISODE_LENGTH // AVG_SAMPLE_PER_EPISODE
 def collect_dataset(args: Args):
 	set_seed(args.seed)
 	device = get_device(args.cuda)
+	runtime_dtype = get_runtime_dtype(device)
 
 	os.makedirs(args.dataset_dir, exist_ok=True)
 	run_name = f"distill_collect__{args.env_id}__{args.seed}__{int(time.time())}"
@@ -282,7 +294,7 @@ def collect_dataset(args: Args):
 				break
 			stepnb = 1 #random.randint(1, OBS_STEP) if total_steps == 0 else OBS_STEP
 			for _ in range(stepnb):
-				obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
+				obs_t = torch.as_tensor(next_obs_raw, dtype=runtime_dtype, device=device)
 				teacher_logits = get_actor_logits(teacher, obs_t)
 				sampled_actions = Categorical(logits=teacher_logits).sample()
 				random_mask = torch.rand(args.num_envs, device=device) < args.random_action_prob
@@ -290,7 +302,7 @@ def collect_dataset(args: Args):
 				actions = torch.where(random_mask, random_actions, sampled_actions)
 				next_obs_raw, _, _, _, _ = envs.step(actions.detach().cpu().numpy())
 				total_steps += 1
-			obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
+			obs_t = torch.as_tensor(next_obs_raw, dtype=runtime_dtype, device=device)
 
 			# Keep only samples where the executed action came from the teacher policy.
 			policy_idx = (~random_mask).nonzero(as_tuple=False).squeeze(-1)
@@ -356,6 +368,7 @@ def collect_dataset(args: Args):
 def _collect_stream_shards(args: Args):
 	set_seed(args.seed)
 	device = get_device(args.stream_collector_cuda and args.cuda)
+	runtime_dtype = get_runtime_dtype(device)
 	os.makedirs(args.stream_dir, exist_ok=True)
 
 	run_name = f"distill_stream_collect__{args.env_id}__{args.seed}__{int(time.time())}"
@@ -384,7 +397,7 @@ def _collect_stream_shards(args: Args):
 			while written < current_capacity:
 				if args.collect_max_steps > 0 and total_steps >= args.collect_max_steps:
 					break
-				obs_t = torch.as_tensor(next_obs_raw, dtype=torch.float32, device=device)
+				obs_t = torch.as_tensor(next_obs_raw, dtype=runtime_dtype, device=device)
 				obs_t = ensure_nchw(obs_t, expected_channels=4)
 
 				teacher_logits = get_actor_logits(teacher, obs_t)
@@ -440,11 +453,12 @@ def build_student(envs: gym.vector.SyncVectorEnv, args: Args, device: torch.devi
 	ppo_args.logic_actor_group_size = args.logic_actor_group_size
 
 	calib_obs_raw, _ = envs.reset(seed=args.seed)
-	calib_obs = torch.as_tensor(calib_obs_raw, dtype=torch.float32, device=device)
+	runtime_dtype = get_runtime_dtype(device)
+	calib_obs = torch.as_tensor(calib_obs_raw, dtype=runtime_dtype, device=device)
 	calib_obs = ensure_nchw(calib_obs, expected_channels=4) / 255.0
 	thresholds = get_distributive_channel_thresholds(calib_obs, num_bits=args.logic_num_bits)
 
-	student = CDLGAagent(envs, args=ppo_args, thresholds=thresholds).to(device)
+	student = CDLGAagent(envs, args=ppo_args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
 	return student
 
 
@@ -508,10 +522,11 @@ def run_epoch(
 	total_match = 0.0
 	total_batches = 0
 	ctx = torch.enable_grad() if is_train else torch.inference_mode()
+	model_dtype = get_module_dtype(student)
 	with ctx:
 		for obs_u8, teacher_logits in tqdm(loader, desc=desc):
-			obs = obs_u8.to(device=device, dtype=torch.float32, non_blocking=True)
-			teacher_logits = teacher_logits.to(device=device, dtype=torch.float32, non_blocking=True)
+			obs = obs_u8.to(device=device, dtype=model_dtype, non_blocking=True)
+			teacher_logits = teacher_logits.to(device=device, dtype=model_dtype, non_blocking=True)
 			student_logits = get_actor_logits(student, obs)
 
 			loss = F.kl_div(
@@ -766,6 +781,7 @@ def train_distillation_stream(args: Args):
 
 def main():
 	args = tyro.cli(Args)
+	torch.set_default_dtype(get_runtime_dtype(get_device(args.cuda)))
 
 	if args.mode not in {"collect", "train", "both", "stream"}:
 		raise ValueError("--mode must be one of: collect, train, both, stream")
