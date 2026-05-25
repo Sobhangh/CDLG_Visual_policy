@@ -31,12 +31,14 @@ from ppo_atari_cdlg import (
 
 @dataclass
 class Args:
-	mode: str = "both"
+	mode: str = "train"
 	"""one of: collect, train, both, stream"""
 
 	# Shared
 	seed: int = 1
 	cuda: bool = True
+	precision: str = "float32"
+	"""floating-point precision: float16 or float32"""
 	env_id: str = "PongNoFrameskip-v4"
 	num_envs: int = 2
 
@@ -79,9 +81,9 @@ class Args:
 	logic_lut_rank: int = 2
 	logic_num_bits: int = 2
 	logic_tree_depth: int = 3
-	logic_k_num: int = 512
-	logic_tau: float = 10.0
-	logic_actor_group_size: int = 1024
+	logic_k_num: int = 300
+	logic_tau: float = 15.0
+	logic_actor_group_size: int = 2048
 
 
 class DistillDataset(Dataset):
@@ -203,8 +205,14 @@ def get_device(cuda: bool) -> torch.device:
 	return torch.device("cuda" if cuda and torch.cuda.is_available() else "cpu")
 
 
-def get_runtime_dtype(device: torch.device) -> torch.dtype:
-	return torch.float16 if device.type == "cuda" else torch.float32
+def get_runtime_dtype(device: torch.device, precision: str) -> torch.dtype:
+	precision_norm = precision.lower()
+	if precision_norm not in {"float16", "float32"}:
+		raise ValueError(f"Unsupported precision: {precision}. Choose from: float16, float32.")
+	if precision_norm == "float16" and device.type != "cuda":
+		print("Requested float16 on non-CUDA device; falling back to float32.")
+		return torch.float32
+	return torch.float16 if precision_norm == "float16" else torch.float32
 
 
 def get_module_dtype(module: torch.nn.Module) -> torch.dtype:
@@ -213,7 +221,12 @@ def get_module_dtype(module: torch.nn.Module) -> torch.dtype:
 	return torch.float32
 
 
-def build_teacher(envs: gym.vector.SyncVectorEnv, checkpoint_path: str, device: torch.device) -> Agent:
+def build_teacher(
+	envs: gym.vector.SyncVectorEnv,
+	checkpoint_path: str,
+	device: torch.device,
+	precision: str,
+) -> Agent:
 	if not checkpoint_path:
 		raise ValueError("--teacher-checkpoint-path must be set for collection.")
 	if not os.path.isfile(checkpoint_path):
@@ -228,7 +241,7 @@ def build_teacher(envs: gym.vector.SyncVectorEnv, checkpoint_path: str, device: 
 		device=device,
 		load_optimizer_state=False,
 	)
-	teacher = teacher.to(device=device, dtype=get_runtime_dtype(device))
+	teacher = teacher.to(device=device, dtype=get_runtime_dtype(device, precision))
 	teacher.eval()
 	return teacher
 
@@ -264,7 +277,7 @@ OBS_STEP = AVG_EPISODE_LENGTH // AVG_SAMPLE_PER_EPISODE
 def collect_dataset(args: Args):
 	set_seed(args.seed)
 	device = get_device(args.cuda)
-	runtime_dtype = get_runtime_dtype(device)
+	runtime_dtype = get_runtime_dtype(device, args.precision)
 
 	os.makedirs(args.dataset_dir, exist_ok=True)
 	run_name = f"distill_collect__{args.env_id}__{args.seed}__{int(time.time())}"
@@ -274,7 +287,7 @@ def collect_dataset(args: Args):
 	assert isinstance(envs.single_action_space, gym.spaces.Discrete)
 	n_actions = int(envs.single_action_space.n)
 
-	teacher = build_teacher(envs, args.teacher_checkpoint_path, device)
+	teacher = build_teacher(envs, args.teacher_checkpoint_path, device, args.precision)
 	max_samples, per_sample_bytes = _collection_budget(args, n_actions)
 
 	obs_shape = (4, 84, 84)
@@ -368,7 +381,7 @@ def collect_dataset(args: Args):
 def _collect_stream_shards(args: Args):
 	set_seed(args.seed)
 	device = get_device(args.stream_collector_cuda and args.cuda)
-	runtime_dtype = get_runtime_dtype(device)
+	runtime_dtype = get_runtime_dtype(device, args.precision)
 	os.makedirs(args.stream_dir, exist_ok=True)
 
 	run_name = f"distill_stream_collect__{args.env_id}__{args.seed}__{int(time.time())}"
@@ -376,7 +389,7 @@ def _collect_stream_shards(args: Args):
 		[make_env(args.env_id, i, capture_video=False, run_name=run_name) for i in range(args.num_envs)]
 	)
 	n_actions = int(envs.single_action_space.n)
-	teacher = build_teacher(envs, args.teacher_checkpoint_path, device)
+	teacher = build_teacher(envs, args.teacher_checkpoint_path, device, args.precision)
 	max_samples, per_sample_bytes = _collection_budget(args, n_actions)
 
 	next_obs_raw, _ = envs.reset(seed=args.seed)
@@ -453,7 +466,7 @@ def build_student(envs: gym.vector.SyncVectorEnv, args: Args, device: torch.devi
 	ppo_args.logic_actor_group_size = args.logic_actor_group_size
 
 	calib_obs_raw, _ = envs.reset(seed=args.seed)
-	runtime_dtype = get_runtime_dtype(device)
+	runtime_dtype = get_runtime_dtype(device, args.precision)
 	calib_obs = torch.as_tensor(calib_obs_raw, dtype=runtime_dtype, device=device)
 	calib_obs = ensure_nchw(calib_obs, expected_channels=4) / 255.0
 	thresholds = get_distributive_channel_thresholds(calib_obs, num_bits=args.logic_num_bits)
@@ -781,7 +794,7 @@ def train_distillation_stream(args: Args):
 
 def main():
 	args = tyro.cli(Args)
-	torch.set_default_dtype(get_runtime_dtype(get_device(args.cuda)))
+	torch.set_default_dtype(get_runtime_dtype(get_device(args.cuda), args.precision))
 
 	if args.mode not in {"collect", "train", "both", "stream"}:
 		raise ValueError("--mode must be one of: collect, train, both, stream")

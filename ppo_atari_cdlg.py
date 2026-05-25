@@ -59,6 +59,8 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
+    precision: str = "float32"
+    """floating-point precision: float16 or float32"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
@@ -167,8 +169,14 @@ def make_env(env_id, idx, capture_video, run_name):
     return thunk
 
 
-def get_runtime_dtype(device: torch.device) -> torch.dtype:
-    return torch.float16 if device.type == "cuda" else torch.float32
+def get_runtime_dtype(device: torch.device, precision: str) -> torch.dtype:
+    precision_norm = precision.lower()
+    if precision_norm not in {"float16", "float32"}:
+        raise ValueError(f"Unsupported precision: {precision}. Choose from: float16, float32.")
+    if precision_norm == "float16" and device.type != "cuda":
+        print("Requested float16 on non-CUDA device; falling back to float32.")
+        return torch.float32
+    return torch.float16 if precision_norm == "float16" else torch.float32
 
 
 def get_module_dtype(module: nn.Module) -> torch.dtype:
@@ -701,8 +709,8 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    torch.set_default_dtype(get_runtime_dtype(device))
-    runtime_dtype = get_runtime_dtype(device)
+    torch.set_default_dtype(get_runtime_dtype(device, args.precision))
+    runtime_dtype = get_runtime_dtype(device, args.precision)
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
