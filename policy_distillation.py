@@ -45,7 +45,7 @@ class Args:
 	"""path to checkpoint of CNN teacher (Agent class)"""
 	random_action_prob: float = 0.05
 	"""epsilon for random actions during collection"""
-	max_buffer_gb: float = 1.0
+	max_buffer_gb: float = 5.0
 	"""hard cap for (observation, logits) buffer size on disk"""
 	collect_max_steps: int = 0
 	"""optional step cap; 0 means collect until storage cap"""
@@ -79,8 +79,8 @@ class Args:
 	logic_lut_rank: int = 2
 	logic_num_bits: int = 2
 	logic_tree_depth: int = 3
-	logic_k_num: int = 256
-	logic_tau: float = 40.0
+	logic_k_num: int = 512
+	logic_tau: float = 10.0
 	logic_actor_group_size: int = 1024
 
 
