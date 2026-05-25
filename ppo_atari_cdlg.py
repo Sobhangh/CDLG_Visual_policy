@@ -176,6 +176,17 @@ def get_module_dtype(module: nn.Module) -> torch.dtype:
         return param.dtype
     return torch.float32
 
+
+def get_module_size_bits(module: nn.Module) -> tuple[int, int]:
+    """Return (parameter_count, storage_bits) for a module's parameters."""
+    total_params = 0
+    total_bits = 0
+    for param in module.parameters():
+        n = param.numel()
+        total_params += n
+        total_bits += n * param.element_size() * 8
+    return total_params, total_bits
+
 def evaluate(
     agent,
     make_env_fn,
@@ -465,6 +476,17 @@ class CDLGAagent(nn.Module):
             GroupSum(k=n_actions, tau=args.logic_tau),
         )
         self.critic = nn.Linear(512, 1)
+
+        backbone_params, backbone_bits = get_module_size_bits(self.actor_logic_backbone)
+        actor_head_params, actor_head_bits = get_module_size_bits(self.actor)
+        print(
+            "[CDLGAagent] actor_logic_backbone: "
+            f"params={backbone_params:,}, size={backbone_bits:,} bits ({backbone_bits / 8 / (1024 ** 2):.2f} MiB)"
+        )
+        print(
+            "[CDLGAagent] actor_head: "
+            f"params={actor_head_params:,}, size={actor_head_bits:,} bits ({actor_head_bits / 8 / (1024 ** 2):.2f} MiB)"
+        )
 
     def _actor_features(self, x: torch.Tensor) -> torch.Tensor:
         #x = ensure_nchw(x, expected_channels=self.expected_channels).float() / 255.0
