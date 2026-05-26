@@ -69,13 +69,16 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    google_colab: bool = True
-    load_model: bool = False
+    google_colab: bool = False
+    """whether this is running on Google Colab (enables some Colab-specific features)"""
+    load_model: bool = True
     """if True, load model/optimizer state from model_path before training"""
-    cnn_critic_load_model: bool = False
-    """if True, load model/optimizer state for CNN critic from model_path before training"""
     model_path: str = ""
     """path to a checkpoint file (.pt) to load before training"""
+    cnn_critic_load_model: bool = True
+    """if True, load model/optimizer state for CNN critic from model_path before training"""
+    cnn_critic_model_path: str = ""
+
     
 
     # Algorithm specific arguments
@@ -87,7 +90,7 @@ class Args:
     """the learning rate of the optimizer"""
     logic_learning_rate: float = 3e-2
     """learning rate used when the CDLGNN backbone is selected (torchlogix-typical)"""
-    agent_arch: str = "cnn"
+    agent_arch: str = "cdlgnn"
     """agent architecture: 'cnn' (original) or 'cdlgnn' (torchlogix logic conv net)"""
     num_envs: int = 8
     """the number of parallel game environments"""
@@ -125,13 +128,13 @@ class Args:
     """thermometer bits per input channel for CDLGNN"""
     logic_tree_depth: int = 3
     """logic tree depth for LogicConv2d/LogicDense"""
-    logic_k_num: int = 128
+    logic_k_num: int = 300
     """base kernel width multiplier for CDLGNN"""
-    logic_tau: float = 40.0
+    logic_tau: float = 20.0
     """temperature scaling value for logic features (reported for reproducibility)"""
     logic_sampling_temperature: float = 0.1
     """soft binarization temperature during training"""
-    logic_actor_group_size: int = 512
+    logic_actor_group_size: int = 2000
     """number of logic neurons per action class; actor LogicDense outputs n_actions * this,
     then GroupSum sums each group into one logit per action"""
     logic_shared_network: bool = False
@@ -385,7 +388,7 @@ def build_logic_actor_backbone(
         LogicConv2d(
             in_dim=4,
             channels=16 * k,
-            num_kernels=64 * k,
+            num_kernels=32 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=1,
@@ -397,7 +400,7 @@ def build_logic_actor_backbone(
         ),
         nn.Flatten(),
         LogicDense(
-            in_dim=64 * k * 2 * 2,
+            in_dim=32 * k * 2 * 2,
             out_dim=actor_out_dim * 4,
             parametrization=parametrization,
             lut_rank=lut_rank,
@@ -603,6 +606,56 @@ def get_distributive_channel_thresholds(calibration_obs: torch.Tensor, num_bits:
     )
 
 
+def maybe_enable_multi_gpu(agent: nn.Module, device: torch.device) -> nn.Module:
+    if device.type != "cuda":
+        return agent
+    n_gpus = torch.cuda.device_count()
+    if n_gpus <= 1:
+        return agent
+
+    if isinstance(agent, CDLGAagent):
+        print(f"Using {n_gpus} GPUs for CDLG actor modules.")
+        # Wrap actor branches only; keep top-level agent API unchanged.
+        agent.actor_logic_backbone = nn.DataParallel(agent.actor_logic_backbone)
+        agent.actor = nn.DataParallel(agent.actor)
+    elif isinstance(agent, CDLGAgentShared):
+        print(f"Using {n_gpus} GPUs for shared CDLG backbone + actor.")
+        agent.backbone = nn.DataParallel(agent.backbone)
+        agent.actor = nn.DataParallel(agent.actor)
+    return agent
+
+
+def _to_portable_cdlg_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    portable: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        key = key.replace("actor_logic_backbone.module.", "actor_logic_backbone.")
+        key = key.replace("backbone.module.", "backbone.")
+        key = key.replace("actor.module.", "actor.")
+        portable[key] = value
+    return portable
+
+
+def _adapt_cdlg_state_dict_for_agent(agent: nn.Module, model_state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    state = _to_portable_cdlg_state_dict(model_state_dict)
+    target_state = agent.state_dict()
+
+    needs_actor_logic_module = any(k.startswith("actor_logic_backbone.module.") for k in target_state.keys())
+    needs_backbone_module = any(k.startswith("backbone.module.") for k in target_state.keys())
+    needs_actor_module = any(k.startswith("actor.module.") for k in target_state.keys())
+
+    adapted: dict[str, torch.Tensor] = {}
+    for key, value in state.items():
+        new_key = key
+        if needs_actor_logic_module and key.startswith("actor_logic_backbone.") and not key.startswith("actor_logic_backbone.module."):
+            new_key = key.replace("actor_logic_backbone.", "actor_logic_backbone.module.", 1)
+        elif needs_backbone_module and key.startswith("backbone.") and not key.startswith("backbone.module."):
+            new_key = key.replace("backbone.", "backbone.module.", 1)
+        elif needs_actor_module and key.startswith("actor.") and not key.startswith("actor.module."):
+            new_key = key.replace("actor.", "actor.module.", 1)
+        adapted[new_key] = value
+    return adapted
+
+
 def save_checkpoint(
     *,
     checkpoint_path: str,
@@ -612,7 +665,7 @@ def save_checkpoint(
     thresholds: torch.Tensor | None = None,
 ):
     checkpoint = {
-        "model_state_dict": agent.state_dict(),
+        "model_state_dict": _to_portable_cdlg_state_dict(agent.state_dict()),
         "optimizer_state_dict": optimizer.state_dict(),
         "args": vars(args),
     }
@@ -636,7 +689,8 @@ def load_checkpoint(
     load_optimizer_state: bool = True,
 ):
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    agent.load_state_dict(checkpoint["model_state_dict"])
+    model_state_dict = checkpoint["model_state_dict"]
+    agent.load_state_dict(_adapt_cdlg_state_dict_for_agent(agent, model_state_dict))
     if load_optimizer_state and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     return checkpoint
@@ -739,11 +793,13 @@ if __name__ == "__main__":
         if args.logic_shared_network:
             print("Using shared CDLGNN backbone for actor and critic.")
             agent = CDLGAgentShared(envs, args=args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
+            agent = maybe_enable_multi_gpu(agent, device)
             optimizer = optim.Adam(agent.parameters(), lr=args.logic_learning_rate, eps=1e-5)
             base_lrs = [args.logic_learning_rate]
         else:
             print("Using separate CDLGNN backbone for actor and standard CNN for critic.")
             agent = CDLGAagent(envs, args=args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
+            agent = maybe_enable_multi_gpu(agent, device)
             optimizer = optim.Adam(
                 [
                     {
@@ -768,19 +824,32 @@ if __name__ == "__main__":
         base_lrs = [args.learning_rate]
 
     if args.load_model:
-        if not args.model_path:
-            raise ValueError("--load-model is enabled, but --model-path is empty.")
-        if not os.path.isfile(args.model_path):
-            raise FileNotFoundError(f"Checkpoint not found: {args.model_path}")
-        if args.cnn_critic_load_model and args.agent_arch.lower() == "cdlgnn":
+        # if not args.model_path:
+        #     raise ValueError("--load-model is enabled, but --model-path is empty.")
+        # if not os.path.isfile(args.model_path):
+        #     raise FileNotFoundError(f"Checkpoint not found: {args.model_path}")
+        if args.cnn_critic_load_model:
             agnet_temp = Agent(envs).to(device=device, dtype=runtime_dtype)
-            checkpoint = torch.load(args.model_path, map_location=device)
+            checkpoint = torch.load(args.cnn_critic_model_path, map_location=device)
             agnet_temp.load_state_dict(checkpoint["model_state_dict"])
             agent.critic_network.load_state_dict(agnet_temp.network.state_dict())
             agent.critic.load_state_dict(agnet_temp.critic.state_dict())
             optimizer = optim.Adam([{"params": (list(agent.actor_logic_backbone.parameters())+ list(agent.actor.parameters())),"lr": args.logic_learning_rate,}],eps=1e-5)
             print("Loaded CNN critic state from checkpoint for CDLGNN agent.")
-        else:
+            if args.model_path:
+                agent_cdlg_temp = maybe_enable_multi_gpu(CDLGAagent(envs, args=args, thresholds=thresholds), device)
+                loaded_checkpoint = load_checkpoint(
+                    checkpoint_path=args.model_path,
+                    agent=agent_cdlg_temp,
+                    optimizer=None,
+                    device=device,
+                    load_optimizer_state=False,
+                )
+                agent.actor_logic_backbone.load_state_dict(agent_cdlg_temp.actor_logic_backbone.state_dict())
+                agent.actor.load_state_dict(agent_cdlg_temp.actor.state_dict())
+                print("Loaded CDLGNN actor state from checkpoint for CDLGNN agent. Actor thresholds:")
+                print(agent.binarization.thresholds)
+        elif args.model_path:
             loaded_checkpoint = load_checkpoint(
                 checkpoint_path=args.model_path,
                 agent=agent,
@@ -803,6 +872,7 @@ if __name__ == "__main__":
     # print("Agent state_dict entries:")
     # for name, tensor in agent.state_dict().items():
     #     print(f"{name}: {tuple(tensor.shape)}")
+    
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape, dtype=runtime_dtype).to(device)

@@ -830,8 +830,13 @@ if __name__ == "__main__":
 """
 Train results:
  Args:  --batch-size 1024 --epochs 50 --student-lr 0.03 --logic-k-num 300 --logic-tree-depth 3 --logic-lut-rank 2 --logic-num-bits 2 --logic-tau 20.0 --logic-actor-group-size 2000 --max-buffer-gb 5.0 --num-envs 2 
-        Epoch 5: train_kl=0.679245, train_top1=0.6838, val_kl=0.852509, val_top1=0.5976
+ For last convolutional layer num_kernels=32 * k otherwise they increase by factor of 4; grad_factor is 2
+ First layer has tree depth of 5; 
+		Epoch 5: train_kl=0.679245, train_top1=0.6838, val_kl=0.852509, val_top1=0.5976
         Epoch 10: train_kl=0.601720, train_top1=0.7180, val_kl=0.698551, val_top1=0.6599
         Epoch 15: train_kl=0.577633, train_top1=0.7261, val_kl=0.654182, val_top1=0.6876
 		Epoch 20: train_kl=0.560095, train_top1=0.7327, val_kl=0.641025, val_top1=0.6843
+		Epoch 25: train_kl=0.562169, train_top1=0.7320, val_kl=0.709162, val_top1=0.6191
+		Epoch 30: train_kl=0.559623, train_top1=0.7346, val_kl=0.637865, val_top1=0.6925
+		Epoch 35: train_kl=0.553657, train_top1=0.7370, val_kl=0.613597, val_top1=0.7099
 """

@@ -16,7 +16,9 @@ pip install ale_py
 pip install "gymnasium[other]"
 pip install tensorboard
 pip install tyro
-python3 policy_distillation.py --teacher_checkpoint_path=checkpoint_cnn.pt
+pip install wandb
+python3 policy_distillation.py --teacher_checkpoint_path=checkpoint_cnn.pt > log.txt 2>&1
+tail -f log.txt
 
 if cuda does not work use previous pytorhc version:
 
@@ -25,3 +27,6 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 live check gpu usage:
 watch -n 1 nvidia-smi
+
+copy file:
+scp -i RL_CDLG_Hyperstack ubuntu@185.216.20.59:/home/ubuntu/CDLG_Visual_policy/distill_runs/student_epoch_24.pt C:\Users\ghasob\ProjectCodes\VisualPolicyDWN
