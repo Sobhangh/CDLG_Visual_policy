@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torchlogix.models import nn
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.data import DataLoader, Dataset, Subset
@@ -47,7 +48,7 @@ class Args:
 	"""path to checkpoint of CNN teacher (Agent class)"""
 	random_action_prob: float = 0.05
 	"""epsilon for random actions during collection"""
-	max_buffer_gb: float = 5.0
+	max_buffer_gb: float = 1.0
 	"""hard cap for (observation, logits) buffer size on disk"""
 	collect_max_steps: int = 0
 	"""optional step cap; 0 means collect until storage cap"""
@@ -81,9 +82,9 @@ class Args:
 	logic_lut_rank: int = 2
 	logic_num_bits: int = 2
 	logic_tree_depth: int = 3
-	logic_k_num: int = 300
-	logic_tau: float = 15.0
-	logic_actor_group_size: int = 2048
+	logic_k_num: int = 300 #150
+	logic_tau: float = 20.0
+	logic_actor_group_size: int = 2000
 
 
 class DistillDataset(Dataset):
@@ -472,6 +473,9 @@ def build_student(envs: gym.vector.SyncVectorEnv, args: Args, device: torch.devi
 	thresholds = get_distributive_channel_thresholds(calib_obs, num_bits=args.logic_num_bits)
 
 	student = CDLGAagent(envs, args=ppo_args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
+	if torch.cuda.device_count() > 1:
+		print("Using", torch.cuda.device_count(), "GPUs")
+		student = nn.DataParallel(student)
 	return student
 
 

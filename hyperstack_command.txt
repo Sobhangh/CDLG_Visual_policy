@@ -1,0 +1,22 @@
+cd C:\Users\ghasob\ProjectCodes
+ssh -i RL_CDLG_Hyperstack ubuntu@<ip-addr>
+
+sudo apt update
+sudo apt install python3-venv python3-full
+git clone https://github.com/Sobhangh/CDLG_Visual_policy.git
+cd CDLG_Visual_policy
+python3 -m venv ~/venvs/torchenv
+source ~/venvs/torchenv/bin/activate
+pip install --upgrade pip
+pip install torchlogix
+pip install gymnasium
+pip install ale_py
+pip install "gymnasium[other]"
+pip install tensorboard
+pip install tyro
+python3 policy_distillation.py --teacher_checkpoint_path=checkpoint_cnn.pt
+
+if cuda does not work use previous pytorhc version:
+
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
