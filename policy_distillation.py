@@ -475,7 +475,7 @@ def build_student(envs: gym.vector.SyncVectorEnv, args: Args, device: torch.devi
 	student = CDLGAagent(envs, args=ppo_args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
 	if torch.cuda.device_count() > 1:
 		print("Using", torch.cuda.device_count(), "GPUs")
-		student = nn.DataParallel(student)
+		student = nn.DataParallel(student).module
 	return student
 
 
