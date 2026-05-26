@@ -473,10 +473,22 @@ def build_student(envs: gym.vector.SyncVectorEnv, args: Args, device: torch.devi
 	thresholds = get_distributive_channel_thresholds(calib_obs, num_bits=args.logic_num_bits)
 
 	student = CDLGAagent(envs, args=ppo_args, thresholds=thresholds).to(device=device, dtype=runtime_dtype)
-	if torch.cuda.device_count() > 1:
-		print("Using", torch.cuda.device_count(), "GPUs")
-		student = nn.DataParallel(student).module
+	if device.type == "cuda" and torch.cuda.device_count() > 1:
+		print("Using", torch.cuda.device_count(), "GPUs for student actor modules")
+		# Wrap actor branches only, so the top-level student API remains unchanged.
+		student.actor_logic_backbone = nn.DataParallel(student.actor_logic_backbone)
+		student.actor = nn.DataParallel(student.actor)
 	return student
+
+
+def _portable_student_state_dict(student: torch.nn.Module) -> dict[str, torch.Tensor]:
+	state = student.state_dict()
+	portable: dict[str, torch.Tensor] = {}
+	for key, value in state.items():
+		key = key.replace("actor_logic_backbone.module.", "actor_logic_backbone.")
+		key = key.replace("actor.module.", "actor.")
+		portable[key] = value
+	return portable
 
 
 def build_split_loaders(dataset: Dataset, args: Args) -> tuple[DataLoader, DataLoader | None]:
@@ -581,7 +593,7 @@ def _save_student_checkpoint(
 ):
 	os.makedirs(args.output_dir, exist_ok=True)
 	ckpt = {
-		"student_state_dict": student.state_dict(),
+		"student_state_dict": _portable_student_state_dict(student),
 		"optimizer_state_dict": optimizer.state_dict(),
 		"epoch": epoch,
 		"train_kl": train_kl,
