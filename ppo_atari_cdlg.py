@@ -385,7 +385,7 @@ def build_logic_actor_backbone(
         LogicConv2d(
             in_dim=4,
             channels=16 * k,
-            num_kernels=32 * k,
+            num_kernels=64 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=1,
@@ -397,7 +397,7 @@ def build_logic_actor_backbone(
         ),
         nn.Flatten(),
         LogicDense(
-            in_dim=32 * k * 2 * 2,
+            in_dim=64 * k * 2 * 2,
             out_dim=actor_out_dim * 4,
             parametrization=parametrization,
             lut_rank=lut_rank,

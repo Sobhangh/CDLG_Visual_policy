@@ -84,7 +84,7 @@ class Args:
 	logic_tree_depth: int = 3
 	logic_k_num: int = 300 #150
 	logic_tau: float = 20.0
-	logic_actor_group_size: int = 2000
+	logic_actor_group_size: int = 4000
 
 
 class DistillDataset(Dataset):
@@ -826,3 +826,12 @@ def main():
 
 if __name__ == "__main__":
 	main()
+
+"""
+Train results:
+ Args:  --batch-size 1024 --epochs 50 --student-lr 0.03 --logic-k-num 300 --logic-tree-depth 3 --logic-lut-rank 2 --logic-num-bits 2 --logic-tau 20.0 --logic-actor-group-size 2000 --max-buffer-gb 5.0 --num-envs 2 
+        Epoch 5: train_kl=0.679245, train_top1=0.6838, val_kl=0.852509, val_top1=0.5976
+        Epoch 10: train_kl=0.601720, train_top1=0.7180, val_kl=0.698551, val_top1=0.6599
+        Epoch 15: train_kl=0.577633, train_top1=0.7261, val_kl=0.654182, val_top1=0.6876
+		Epoch 20: train_kl=0.560095, train_top1=0.7327, val_kl=0.641025, val_top1=0.6843
+"""

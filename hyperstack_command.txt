@@ -1,3 +1,5 @@
+#####  Be careful to use cuda of 12.6+ when chosing the ubuntu OS ################
+
 cd C:\Users\ghasob\ProjectCodes
 ssh -i RL_CDLG_Hyperstack ubuntu@<ip-addr>
 
@@ -20,3 +22,6 @@ if cuda does not work use previous pytorhc version:
 
 pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+live check gpu usage:
+watch -n 1 nvidia-smi
