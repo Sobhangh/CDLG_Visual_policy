@@ -839,8 +839,12 @@ if __name__ == "__main__":
                 agent_cdlg_temp = maybe_enable_multi_gpu(CDLGAagent(envs, args=args, thresholds=thresholds), device)
                 checkpoint = torch.load(args.model_path, map_location=device)
                 agent_cdlg_temp.load_state_dict(_adapt_cdlg_state_dict_for_agent(agent_cdlg_temp, checkpoint["student_state_dict"]))
-                agent.actor_logic_backbone.module.load_state_dict(agent_cdlg_temp.actor_logic_backbone.module.state_dict())
-                agent.actor.module.load_state_dict(agent_cdlg_temp.actor.module.state_dict())
+                if torch.cuda.device_count() > 1:
+                    agent.actor_logic_backbone.module.load_state_dict(agent_cdlg_temp.actor_logic_backbone.module.state_dict())
+                    agent.actor.module.load_state_dict(agent_cdlg_temp.actor.module.state_dict())
+                else:
+                    agent.actor_logic_backbone.load_state_dict(agent_cdlg_temp.actor_logic_backbone.state_dict())
+                    agent.actor.load_state_dict(agent_cdlg_temp.actor.state_dict())
                 print("Loaded CDLGNN actor state from checkpoint for CDLGNN agent. Actor thresholds:")
                 print(agent.binarization.thresholds)
             optimizer = optim.Adam([{"params": (list(agent.actor_logic_backbone.parameters())+ list(agent.actor.parameters())),"lr": args.logic_learning_rate,}],eps=1e-5)

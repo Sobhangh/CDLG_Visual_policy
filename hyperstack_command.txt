@@ -17,13 +17,20 @@ pip install "gymnasium[other]"
 pip install tensorboard
 pip install tyro
 pip install wandb
-python3 policy_distillation.py --teacher_checkpoint_path=checkpoint_cnn.pt > log.txt 2>&1
-tail -f log.txt
 
 if cuda does not work use previous pytorhc version:
 
 pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+
+
+python3 policy_distillation.py --teacher_checkpoint_path=checkpoint_cnn.pt > log.txt 2>&1
+tail -f log.txt
+
+python3 ppo_atari_cdlg.py --model_path=student_epoch_36.pt --cnn_critic_model_path=checkpoint_cnn.pt > log.txt 2>&1
+tail -f log.txt
+
 
 live check gpu usage:
 watch -n 1 nvidia-smi
