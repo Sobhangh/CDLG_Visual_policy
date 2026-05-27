@@ -834,21 +834,16 @@ if __name__ == "__main__":
             agnet_temp.load_state_dict(checkpoint["model_state_dict"])
             agent.critic_network.load_state_dict(agnet_temp.network.state_dict())
             agent.critic.load_state_dict(agnet_temp.critic.state_dict())
-            optimizer = optim.Adam([{"params": (list(agent.actor_logic_backbone.parameters())+ list(agent.actor.parameters())),"lr": args.logic_learning_rate,}],eps=1e-5)
             print("Loaded CNN critic state from checkpoint for CDLGNN agent.")
             if args.model_path:
                 agent_cdlg_temp = maybe_enable_multi_gpu(CDLGAagent(envs, args=args, thresholds=thresholds), device)
-                loaded_checkpoint = load_checkpoint(
-                    checkpoint_path=args.model_path,
-                    agent=agent_cdlg_temp,
-                    optimizer=None,
-                    device=device,
-                    load_optimizer_state=False,
-                )
-                agent.actor_logic_backbone.load_state_dict(agent_cdlg_temp.actor_logic_backbone.state_dict())
-                agent.actor.load_state_dict(agent_cdlg_temp.actor.state_dict())
+                checkpoint = torch.load(args.model_path, map_location=device)
+                agent_cdlg_temp.load_state_dict(_adapt_cdlg_state_dict_for_agent(agent_cdlg_temp, checkpoint["student_state_dict"]))
+                agent.actor_logic_backbone.module.load_state_dict(agent_cdlg_temp.actor_logic_backbone.module.state_dict())
+                agent.actor.module.load_state_dict(agent_cdlg_temp.actor.module.state_dict())
                 print("Loaded CDLGNN actor state from checkpoint for CDLGNN agent. Actor thresholds:")
                 print(agent.binarization.thresholds)
+            optimizer = optim.Adam([{"params": (list(agent.actor_logic_backbone.parameters())+ list(agent.actor.parameters())),"lr": args.logic_learning_rate,}],eps=1e-5)
         elif args.model_path:
             loaded_checkpoint = load_checkpoint(
                 checkpoint_path=args.model_path,
