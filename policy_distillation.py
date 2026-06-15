@@ -46,6 +46,8 @@ class Args:
 	# Teacher / collection
 	teacher_checkpoint_path: str = ""
 	"""path to checkpoint of CNN teacher (Agent class)"""
+	student_checkpoint_path: str = ""
+	"""optional path to a student checkpoint to resume from"""
 	random_action_prob: float = 0.05
 	"""epsilon for random actions during collection"""
 	max_buffer_gb: float = 1.0
@@ -491,6 +493,56 @@ def _portable_student_state_dict(student: torch.nn.Module) -> dict[str, torch.Te
 	return portable
 
 
+def _adapt_student_state_dict_for_student(
+	student: torch.nn.Module,
+	student_state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+	target_state = student.state_dict()
+	needs_actor_logic_module = any(k.startswith("actor_logic_backbone.module.") for k in target_state.keys())
+	needs_backbone_module = any(k.startswith("backbone.module.") for k in target_state.keys())
+	needs_actor_module = any(k.startswith("actor.module.") for k in target_state.keys())
+
+	adapted: dict[str, torch.Tensor] = {}
+	for key, value in student_state_dict.items():
+		new_key = key.replace("actor_logic_backbone.module.", "actor_logic_backbone.")
+		new_key = new_key.replace("backbone.module.", "backbone.")
+		new_key = new_key.replace("actor.module.", "actor.")
+		if needs_actor_logic_module and new_key.startswith("actor_logic_backbone.") and not new_key.startswith("actor_logic_backbone.module."):
+			new_key = new_key.replace("actor_logic_backbone.", "actor_logic_backbone.module.", 1)
+		elif needs_backbone_module and new_key.startswith("backbone.") and not new_key.startswith("backbone.module."):
+			new_key = new_key.replace("backbone.", "backbone.module.", 1)
+		elif needs_actor_module and new_key.startswith("actor.") and not new_key.startswith("actor.module."):
+			new_key = new_key.replace("actor.", "actor.module.", 1)
+		adapted[new_key] = value
+	return adapted
+
+
+def load_student_checkpoint(
+	*,
+	checkpoint_path: str,
+	student: CDLGAagent,
+	optimizer: optim.Optimizer,
+	device: torch.device,
+) -> dict[str, object]:
+	if not checkpoint_path:
+		return {}
+	if not os.path.isfile(checkpoint_path):
+		raise FileNotFoundError(f"Student checkpoint not found: {checkpoint_path}")
+
+	checkpoint = torch.load(checkpoint_path, map_location=device)
+	student_state_dict = checkpoint.get("student_state_dict", checkpoint.get("model_state_dict"))
+	if student_state_dict is None:
+		raise KeyError(f"Checkpoint does not contain a student/model state dict: {checkpoint_path}")
+
+	student.load_state_dict(_adapt_student_state_dict_for_student(student, student_state_dict))
+	if "optimizer_state_dict" in checkpoint:
+		try:
+			optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+		except Exception as exc:
+			print(f"Loaded student weights from {checkpoint_path}, but optimizer state could not be restored: {exc}")
+	return checkpoint
+
+
 def build_split_loaders(dataset: Dataset, args: Args) -> tuple[DataLoader, DataLoader | None]:
 	n = len(dataset)
 	if n <= 0:
@@ -616,8 +668,17 @@ def train_distillation(args: Args):
 	student = build_student(envs, args, device)
 	trainable_params = list(student.actor_logic_backbone.parameters()) + list(student.actor.parameters())
 	optimizer = optim.Adam(trainable_params, lr=args.student_lr, eps=1e-5)
+	student_checkpoint = load_student_checkpoint(
+		checkpoint_path=args.student_checkpoint_path,
+		student=student,
+		optimizer=optimizer,
+		device=device,
+	)
+	start_epoch = int(student_checkpoint.get("epoch", 0)) if student_checkpoint else 0
+	if student_checkpoint:
+		print(f"Loaded student checkpoint from: {args.student_checkpoint_path}")
 
-	for epoch in range(1, args.epochs + 1):
+	for epoch in range(start_epoch + 1, start_epoch + args.epochs + 1):
 		train_kl, train_top1 = run_epoch(
 			student=student,
 			loader=train_loader,
@@ -675,7 +736,7 @@ def train_distillation(args: Args):
 		args=args,
 		student=student,
 		optimizer=optimizer,
-		epoch=args.epochs,
+		epoch=start_epoch + args.epochs,
 		train_kl=train_kl,
 		train_top1=train_top1,
 		val_kl=val_kl,
@@ -720,9 +781,17 @@ def train_distillation_stream(args: Args):
 	student = build_student(envs, args, device)
 	trainable_params = list(student.actor_logic_backbone.parameters()) + list(student.actor.parameters())
 	optimizer = optim.Adam(trainable_params, lr=args.student_lr, eps=1e-5)
+	student_checkpoint = load_student_checkpoint(
+		checkpoint_path=args.student_checkpoint_path,
+		student=student,
+		optimizer=optimizer,
+		device=device,
+	)
+	epoch = int(student_checkpoint.get("epoch", 0)) if student_checkpoint else 0
+	if student_checkpoint:
+		print(f"Loaded student checkpoint from: {args.student_checkpoint_path}")
 
 	seen_pairs: set[tuple[str, str]] = set()
-	epoch = 0
 
 	while True:
 		pairs = _discover_shard_pairs(args.stream_dir)
