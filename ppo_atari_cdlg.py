@@ -344,6 +344,7 @@ def build_logic_actor_backbone(
     Spatial transitions for 84x84 input:
     84x84 -> conv(6,s3)=27x27 -> pool(2,s2)=13x13 -> conv(3,s2)=6x6 -> conv(3,s1)=4x4 -> conv(3,s1)=2x2
     """
+    channels_per_group = None # 2
     backbone = nn.Sequential(
         LogicConv2d(
             in_dim=h,
@@ -369,7 +370,7 @@ def build_logic_actor_backbone(
             padding=0,
             lut_rank=lut_rank,
             grad_factor=2,
-            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": channels_per_group},
             parametrization=parametrization,
         ),
         LogicConv2d(
@@ -382,25 +383,25 @@ def build_logic_actor_backbone(
             padding=0,
             grad_factor=2,
             lut_rank=lut_rank,
-            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": channels_per_group},
             parametrization=parametrization,
         ),
         LogicConv2d(
             in_dim=4,
             channels=16 * k,
-            num_kernels=32 * k,
+            num_kernels=64 * k,
             tree_depth=tree_depth,
             receptive_field_size=3,
             stride=1,
             padding=0,
             grad_factor=2,
             lut_rank=lut_rank,
-            connections_kwargs={"init_method": "random-unique", "channel_group_size": 2},
+            connections_kwargs={"init_method": "random-unique", "channel_group_size": channels_per_group},
             parametrization=parametrization,
         ),
         nn.Flatten(),
         LogicDense(
-            in_dim=32 * k * 2 * 2,
+            in_dim=64 * k * 2 * 2,
             out_dim=actor_out_dim * 4,
             parametrization=parametrization,
             lut_rank=lut_rank,

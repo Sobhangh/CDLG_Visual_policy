@@ -85,7 +85,7 @@ class Args:
 	logic_num_bits: int = 2
 	logic_tree_depth: int = 3
 	logic_k_num: int = 300 #150
-	logic_tau: float = 20.0
+	logic_tau: float = 40.0
 	logic_actor_group_size: int = 4000
 
 
