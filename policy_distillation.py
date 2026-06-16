@@ -897,6 +897,13 @@ if __name__ == "__main__":
 	main()
 
 """
+Current progress:
+	Have to try higher "k" values and possibly the increase factor
+	between convolutional layers of the filter which is currently 4
+	Otherwise can try the Compact logic paper and see if higher number of convolutional layers 
+	would be helpful. 
+
+
 Train results:
  Args:  --batch-size 1024 --epochs 50 --student-lr 0.03 --logic-k-num 300 --logic-tree-depth 3 --logic-lut-rank 2 --logic-num-bits 2 --logic-tau 20.0 --logic-actor-group-size 2000 --max-buffer-gb 5.0 --num-envs 2 
  For last convolutional layer num_kernels=32 * k otherwise they increase by factor of 4; grad_factor is 2
