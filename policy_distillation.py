@@ -900,6 +900,7 @@ if __name__ == "__main__":
 Current progress:
 	Have to try higher "k" values and possibly the increase factor
 	between convolutional layers of the filter which is currently 4
+	It is also good to test more convolutional layers
 	Otherwise can try the Compact logic paper and see if higher number of convolutional layers 
 	would be helpful. 
 
