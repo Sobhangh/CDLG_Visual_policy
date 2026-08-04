@@ -1,0 +1,32 @@
+venv/
+*.png
+*.svg
+*.ps1
+*pyc
+.idea
+*.so
+*egg-info
+__pycache__/
+.DS_Store
+.ipynb_checkpoints
+*.pytest_cache/
+build/
+experiments/results/
+
+# Documentation build artifacts
+docs/_build/
+docs/api/generated/
+
+# Sphinx temporary files
+docs/.doctrees/
+
+# data in experiments folder
+experiments/data-mnist/
+experiments/data-fmnist/
+experiments/data-fashion-mnist/
+experiments/data-jsc/
+experiments/data-cifar/
+experiments/data
+
+# env files with concrete paths
+experiments/env.sh

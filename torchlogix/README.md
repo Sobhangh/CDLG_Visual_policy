@@ -1,0 +1,106 @@
+<!-- begin-logo -->
+![torchlogix_logo](assets/logo.png)
+<!-- end-logo -->
+
+<p align="center">
+  <a href="https://pypi.org/project/torchlogix/">
+    <img src="https://badge.fury.io/py/torchlogix.svg" alt="PyPI version">
+  </a>
+  <a href="https://github.com/ligerlac/torchlogix/actions/workflows/unit-test.yml">
+    <img src="https://github.com/ligerlac/torchlogix/actions/workflows/unit-test.yml/badge.svg?branch=main" alt="Build Status">
+  </a>
+  <a href="https://ligerlac.github.io/torchlogix/">
+    <img src="https://img.shields.io/badge/docs-online-success" alt="Documentation">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License">
+  </a>
+  <a href="https://doi.org/10.5281/zenodo.18800427">
+    <img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18800427-blue" alt="DOI">
+  </a>
+  <a href="https://nsf.gov/awardsearch/showAward?AWD_ID=2323298">
+    <img src="https://img.shields.io/badge/NSF-2323298-blue.svg" alt="DOI">
+  </a>
+</p>
+
+`torchlogix` is a `PyTorch`-based library for training and inference of **logic neural networks**. These solve machine learning tasks by learning combinations of boolean logic expressions. As the choice of boolean expressions is conventionally non-differentiable, relaxations are applied to allow training with gradient-based methods. The final model can be discretized again, resulting in a fully boolean expression with extremely efficient inference, e.g., beyond a million images of MNIST per second on CPU.
+
+**Note:** `torchlogix` is based on the `difflogic` package ([https://github.com/Felix-Petersen/difflogic/](https://github.com/Felix-Petersen/difflogic/)), and extends it by new concepts such as additional layer types, compact parametrizations, higher-dimensional logic blocks, learnable connections and binarization as described in "WARP Logic Neural Networks" (Paper @ [ArXiv](https://arxiv.org/abs/2602.03527)). It also implements a graph-based intermediate representation (IR) for efficient compilation to different targets (currently FPGA & CPU).
+
+## Installation
+```shell
+pip install torchlogix                 # basic
+pip install "torchlogix[dev]"          # with dev tools
+```
+The following software stacks have validated performance:
+`python3.12` / `python3.13`, `cuda12.4` / `cuda13.0`, `torch2.6` / `torch2.9`.
+
+## Quickstart
+`torchlogix` provides learnable logic layers with `torch.nn`-like API. For example, a very simple convolutional model for MNIST can be defined like so:
+```python
+import torch
+from torchlogix.layers import LogicDense, LogicConv2d, OrPooling2d, GroupSum, FixedBinarization
+
+model = torch.nn.Sequential(
+    # Every pixel is False (=0) or True (>0). Standard practice on MNIST
+    FixedBinarization(thresholds=[0.0]),
+    # Convolution w/ 16 kernels - 4 inputs each, randomly drawn from a 3x3 receptive field
+    LogicConv2d(in_dim=28, channels=1, num_kernels=16, tree_depth=2, receptive_field_size=3),
+    # Reduce dimensionality with pooling operation
+    OrPooling2d(kernel_size=2, stride=2, padding=0),
+    torch.nn.Flatten(),
+    # Two randomly connected dense layers w/ 4000 neurons
+    LogicDense(16*13*13, 4_000),
+    LogicDense(4_000, 4_000),
+    # Output 10 logits via group sum (scaled by 1/8 for smoothness)
+    GroupSum(k=10, tau=8)
+)
+```
+Like ordinary PyTorch neural networks, this model may be trained, e.g., with `torch.nn.CrossEntropyLoss`. The Adam optimizer with a learning rate of `0.01` works well. Every layer and hence the entire model can be switched between the relaxed trainable and discrete, fully boolean version with the standard `model.train()` / `model.eval()` commands. Furthermore, there is a dedicated `model.set_export_mode()`, which expresses the forward path as pure boolean- and indexing operations. This can be represented as a fully unrolled combinational `Circuit`, which can be compiled for fast inference:
+```python
+from torchlogix import Circuit
+circuit = Circuit.from_model(model, input_shape=(1, 28, 28))
+circuit.compile()
+preds = circuit(X_np, use_compiled=True)  # ~6 ms for 100k images on my laptop
+```
+The graph-based IR of a `Circuit` can be simplified and emit `C` and `Verilog` code directly:
+```python
+circuit.simplify()  # removes dead code, folds constants, does dedup...
+circuit.get_c_code()
+circuit.get_verilog_code()
+```
+
+The full training- and evaluation of the model above is demonstrated in the example notebook [examples/mnist_example.ipynb](examples/mnist_example.ipynb).
+
+
+## Documentation
+
+**More thorough documentation is available [here](https://ligerlac.github.io/torchlogix/)**, including an **API Reference**. Some quick links:
+- **[Installation Guide](docs/guides/installation.md)** - Detailed installation instructions
+- **[Quick Start](docs/guides/quickstart.md)** - Get started with TorchLogix in minutes
+- **[Concepts](docs/guides/concepts.md)** - Understand some of the design choices behind `torchlogix`
+
+## Experiments
+
+Various experiments can be run using the script `experiments/train.py`. For example, the medium-sized convolutional model on CIFAR-10 from the paper  "Convolutional Differentiable Logic Gate Networks" (Paper @ [ArXiv](https://arxiv.org/pdf/2411.04732)), can be trained like so:
+```
+python train.py --dataset cifar-10 -a ClgnCifar10Medium --connections-init-method random-unique -lr 0.02 -wd 0.002 --device cuda --compile-model
+```
+This achieves 70% discrete test accurcay within 30 minutes on an `A100`, which can be increased further with data augmentation, and knowledge distillation but details of the training procedure are beyond the scope of this package.
+
+## Citation
+
+If you use torchlogix in your research, please cite:
+
+```bibtex
+@software{torchlogix2026,
+  author = {Gerlach, Lino and Gerlach, Thore and Kauffman, Elliott and Våge, Liv},
+  title = {torchlogix},
+  year = {2026},
+  doi = {10.5281/zenodo.18800427}
+}
+```
+
+## License
+
+`torchlogix` is released under the MIT license. See [LICENSE](LICENSE) for additional details about it.
